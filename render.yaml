@@ -11,8 +11,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20
-      - key: PORT
-        value: 8787
       - key: APP_BASE_URL
         sync: false
       - key: FRONTEND_URL
