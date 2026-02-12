@@ -44,6 +44,7 @@ const DEFAULT_TIER_STATE: TierListState = {
   unranked: [],
   updatedAt: null
 };
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
 function displayLabel(key: TierKey) {
   return `${key} Tier`;
@@ -54,6 +55,21 @@ function statusLabel(status: string) {
   if (status === "supported") return "Supported";
   if (status === "pilot") return "Pilot";
   return status;
+}
+
+function apiUrl(pathname: string) {
+  return `${API_BASE}${pathname}`;
+}
+
+function assetUrl(pathname: string) {
+  if (!pathname) return pathname;
+  if (pathname.startsWith("http://") || pathname.startsWith("https://") || pathname.startsWith("data:")) return pathname;
+  if (pathname.startsWith("/")) return API_BASE ? `${API_BASE}${pathname}` : pathname;
+  return pathname;
+}
+
+function normalizeGame(game: Game): Game {
+  return { ...game, coverArtUrl: assetUrl(game.coverArtUrl) };
 }
 
 function App() {
@@ -120,14 +136,14 @@ function App() {
 
   async function loadInitialData() {
     try {
-      const [bootstrapResp, themesResp] = await Promise.all([fetch("/api/v1/bootstrap"), fetch("/api/v1/themes")]);
+      const [bootstrapResp, themesResp] = await Promise.all([fetch(apiUrl("/api/v1/bootstrap")), fetch(apiUrl("/api/v1/themes"))]);
       const bootstrap = await bootstrapResp.json();
       const themesData = await themesResp.json();
 
       setThemes(themesData.themes ?? []);
       setThemeId(bootstrap?.theme?.themeId ?? "apple-glass-white-default");
       setLinkedAccounts(bootstrap?.linkedAccounts ?? []);
-      setGames(bootstrap?.games ?? []);
+      setGames((bootstrap?.games ?? []).map(normalizeGame));
       setTierState(bootstrap?.tierListState ?? DEFAULT_TIER_STATE);
     } finally {
       setLoading(false);
@@ -141,7 +157,7 @@ function App() {
         tiers: tierState.tiers,
         unranked: tierState.unranked
       };
-      const resp = await fetch("/api/v1/tier-list/state", {
+      const resp = await fetch(apiUrl("/api/v1/tier-list/state"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -161,7 +177,7 @@ function App() {
     e.preventDefault();
     if (!accountName.trim()) return;
 
-    const resp = await fetch("/api/v1/accounts/link", {
+    const resp = await fetch(apiUrl("/api/v1/accounts/link"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ platform: accountPlatform, accountName: accountName.trim() })
@@ -178,11 +194,11 @@ function App() {
   async function syncSteamAccount(accountId: string) {
     setSyncingAccountId(accountId);
     try {
-      const resp = await fetch(`/api/v1/accounts/steam/sync/${accountId}`, { method: "POST" });
+      const resp = await fetch(apiUrl(`/api/v1/accounts/steam/sync/${accountId}`), { method: "POST" });
       if (resp.ok) {
-        const bootstrapResp = await fetch("/api/v1/bootstrap");
+        const bootstrapResp = await fetch(apiUrl("/api/v1/bootstrap"));
         const bootstrap = await bootstrapResp.json();
-        setGames(bootstrap?.games ?? []);
+        setGames((bootstrap?.games ?? []).map(normalizeGame));
         setTierState(bootstrap?.tierListState ?? DEFAULT_TIER_STATE);
         setSteamStatus("Steam library synced.");
       } else {
@@ -199,7 +215,7 @@ function App() {
     if (manualQuery.trim().length < 2) return;
     setSearching(true);
     try {
-      const resp = await fetch("/api/v1/metadata/search", {
+      const resp = await fetch(apiUrl("/api/v1/metadata/search"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: manualQuery.trim() })
@@ -219,7 +235,7 @@ function App() {
     popularity: number;
     coverArtUrl: string | null;
   }) {
-    const resp = await fetch("/api/v1/games/manual", {
+    const resp = await fetch(apiUrl("/api/v1/games/manual"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -236,14 +252,14 @@ function App() {
       return;
     }
     const json = await resp.json();
-    setGames((prev) => [...prev, json.game]);
+    setGames((prev) => [...prev, normalizeGame(json.game)]);
     setTierState((prev) => ({ ...prev, unranked: [...prev.unranked, json.game.id] }));
     setSearchResults((prev) => prev.filter((r) => r.title !== result.title));
   }
 
   async function removeSelectedGames() {
     if (selectedGameIds.length === 0) return;
-    const resp = await fetch("/api/v1/games/remove", {
+    const resp = await fetch(apiUrl("/api/v1/games/remove"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ gameIds: selectedGameIds })
@@ -272,7 +288,7 @@ function App() {
 
   async function applyTheme(theme: Theme) {
     setThemeId(theme.id);
-    await fetch("/api/v1/users/me/theme", {
+    await fetch(apiUrl("/api/v1/users/me/theme"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ themeId: theme.id })
@@ -440,7 +456,7 @@ function App() {
           <h2>Account Linking</h2>
           <p>Link-only integrations. Manual input happens only in Games list.</p>
           <div className="row wrap">
-            <button onClick={() => (window.location.href = "/api/v1/accounts/steam/start")}>Connect Steam (OAuth)</button>
+            <button onClick={() => (window.location.href = apiUrl("/api/v1/accounts/steam/start"))}>Connect Steam (OAuth)</button>
             {steamStatus && <span>{steamStatus}</span>}
           </div>
           <form className="inline-form" onSubmit={linkAccount}>
@@ -748,7 +764,7 @@ function paletteFor(themeId: string) {
       tierC: "#ffd6a5",
       tierD: "#ffadad",
       tierF: "#ff6b6b",
-      bgImage: "url('/art/ThemeImages/BlondeAnimeGirlTheme/1.png')"
+      bgImage: `url('${assetUrl("/art/ThemeImages/BlondeAnimeGirlTheme/1.png")}')`
     }
   };
 
@@ -779,20 +795,20 @@ function paletteFor(themeId: string) {
 function themeSpritesFor(themeId: string) {
   if (themeId === "catstacker-arcade") {
     return [
-      "/art/ThemeImages/CatStackerTheme/Cats/Cat1.png",
-      "/art/ThemeImages/CatStackerTheme/Cats/Cat2.png",
-      "/art/ThemeImages/CatStackerTheme/Cats/Cat3.png",
-      "/art/ThemeImages/CatStackerTheme/Cats/Cat4.png",
-      "/art/ThemeImages/CatStackerTheme/Cats/Cat5.png",
-      "/art/ThemeImages/CatStackerTheme/Platforms/teaplatform.png",
-      "/art/ThemeImages/CatStackerTheme/Platforms/chickenplatform.png",
-      "/art/ThemeImages/CatStackerTheme/Platforms/castleplatform.png"
+      assetUrl("/art/ThemeImages/CatStackerTheme/Cats/Cat1.png"),
+      assetUrl("/art/ThemeImages/CatStackerTheme/Cats/Cat2.png"),
+      assetUrl("/art/ThemeImages/CatStackerTheme/Cats/Cat3.png"),
+      assetUrl("/art/ThemeImages/CatStackerTheme/Cats/Cat4.png"),
+      assetUrl("/art/ThemeImages/CatStackerTheme/Cats/Cat5.png"),
+      assetUrl("/art/ThemeImages/CatStackerTheme/Platforms/teaplatform.png"),
+      assetUrl("/art/ThemeImages/CatStackerTheme/Platforms/chickenplatform.png"),
+      assetUrl("/art/ThemeImages/CatStackerTheme/Platforms/castleplatform.png")
     ];
   }
   if (themeId === "blonde-anime-glow") {
     return [
-      "/art/ThemeImages/BlondeAnimeGirlTheme/1.png",
-      "/art/ThemeImages/BlondeAnimeGirlTheme/2.png"
+      assetUrl("/art/ThemeImages/BlondeAnimeGirlTheme/1.png"),
+      assetUrl("/art/ThemeImages/BlondeAnimeGirlTheme/2.png")
     ];
   }
   return [];

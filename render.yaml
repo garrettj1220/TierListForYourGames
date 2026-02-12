@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: tier-list-your-games-api
+    env: node
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: npm install
+    startCommand: npm run start --workspace server
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PORT
+        value: 8787
+      - key: APP_BASE_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: STEAM_WEB_API_KEY
+        sync: false
+      - key: THEGAMESDB_API_KEY
+        sync: false
+
+  - type: static
+    name: tier-list-your-games-web
+    rootDir: .
+    buildCommand: npm install && npm run build --workspace client
+    staticPublishPath: client/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

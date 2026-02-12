@@ -23,6 +23,10 @@ function appUrl() {
   return process.env.APP_BASE_URL || `http://localhost:${PORT}`;
 }
 
+function frontendUrl() {
+  return process.env.FRONTEND_URL || "http://localhost:5173";
+}
+
 app.get("/api/v1/health", (_req, res) => {
   res.json({ ok: true, timestamp: nowIso(), database: process.env.DATABASE_URL ? "postgres" : "json" });
 });
@@ -69,7 +73,7 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
   const mode = q["openid.mode"];
   const claimedId = q["openid.claimed_id"];
   if (mode !== "id_res" || typeof claimedId !== "string") {
-    return res.redirect("http://localhost:5173/?steam=failed");
+    return res.redirect(`${frontendUrl()}/?steam=failed`);
   }
 
   try {
@@ -87,12 +91,12 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
     });
     const verifyText = await verifyResp.text();
     if (!verifyText.includes("is_valid:true")) {
-      return res.redirect("http://localhost:5173/?steam=failed");
+      return res.redirect(`${frontendUrl()}/?steam=failed`);
     }
 
     const steamId = claimedId.split("/").pop();
     if (!steamId) {
-      return res.redirect("http://localhost:5173/?steam=failed");
+      return res.redirect(`${frontendUrl()}/?steam=failed`);
     }
 
     await storage.linkAccount(USER_ID, {
@@ -102,9 +106,9 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
       metadata: { steamId }
     });
 
-    return res.redirect("http://localhost:5173/?steam=linked");
+    return res.redirect(`${frontendUrl()}/?steam=linked`);
   } catch {
-    return res.redirect("http://localhost:5173/?steam=failed");
+    return res.redirect(`${frontendUrl()}/?steam=failed`);
   }
 });
 
