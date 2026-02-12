@@ -91,6 +91,18 @@
       "coverArtUrl": "https://placehold.co/240x320/f8fafc/111827?text=Hades",
       "manuallyAdded": true,
       "createdAt": "2026-02-12T21:39:26.705Z"
+    },
+    {
+      "id": "game-w3enu2xi",
+      "userId": "demo-user",
+      "title": "Hades",
+      "platform": "Steam",
+      "genre": "Roguelike",
+      "popularity": 93,
+      "playtimeMinutes": 0,
+      "coverArtUrl": "https://placehold.co/240x320/f8fafc/111827?text=Hades",
+      "manuallyAdded": true,
+      "createdAt": "2026-02-12T21:49:33.883Z"
     }
   ],
   "tierListState": {
@@ -102,7 +114,8 @@
         "game-ftecslu2",
         "game-vl6uo8yn",
         "game-bmow7tz0",
-        "game-b563ungt"
+        "game-b563ungt",
+        "game-uo24zk5p"
       ],
       "A": [],
       "B": [],
@@ -111,9 +124,9 @@
       "F": []
     },
     "unranked": [
-      "game-uo24zk5p"
+      "game-w3enu2xi"
     ],
-    "updatedAt": "2026-02-12T21:39:26.919Z"
+    "updatedAt": "2026-02-12T21:49:34.103Z"
   },
   "userThemeSettings": {
     "userId": "demo-user",

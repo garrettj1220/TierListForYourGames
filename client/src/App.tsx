@@ -399,6 +399,7 @@ function App() {
         <div>
           <h1>Tier List Your Games</h1>
           <p>Build your list across every linked platform.</p>
+          <p className="muted-note">Created by GarrettJPG</p>
         </div>
         <div className="topbar-actions">
           {screen !== "menu" && (

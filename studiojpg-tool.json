@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "kind": "studiojpg_tool",
+  "title": "Tier List Your Games",
+  "slug": "tier-list-your-games",
+  "description": "Standalone MVP to connect accounts, sync game libraries, rank titles into S/A/B/C/D/F tiers, and export results.",
+  "tags": ["games", "tier-list", "ranking", "library", "steam", "mvp"],
+  "cover_image": "Art/Cover/CoverArt.png",
+  "launch_url": "https://github.com/garrettj1220/TierListForYourGames",
+  "integration_mode": "external",
+  "status": "beta",
+  "card_cta": "View Repo"
+}

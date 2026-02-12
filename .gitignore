@@ -1,4 +1,38 @@
+# Dependencies
 node_modules/
-client/dist/
+client/node_modules/
+server/node_modules/
+
+# Build outputs
+build/
+
+# Local env files
 .env
+.env.*
+!.env.example
+
+# Logs and coverage
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
+
+# Caches and temp files
+.cache/
+.tmp/
+tmp/
+*.local
+
+# OS/editor artifacts
 .DS_Store
+.idea/
+.vscode/
+
+# Runtime/local data
+server/data/db.json
+
+# Generated artifacts
+CodexOutput/
