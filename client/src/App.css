@@ -31,6 +31,12 @@
   font-size: 0.9rem;
 }
 
+.muted-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 8px 0;
+}
+
 .sprite-strip {
   display: flex;
   gap: 8px;

@@ -49,6 +49,13 @@ function displayLabel(key: TierKey) {
   return `${key} Tier`;
 }
 
+function statusLabel(status: string) {
+  if (status === "coming-soon") return "Coming Soon";
+  if (status === "supported") return "Supported";
+  if (status === "pilot") return "Pilot";
+  return status;
+}
+
 function App() {
   const [screen, setScreen] = useState<Screen>("menu");
   const [loading, setLoading] = useState(true);
@@ -106,6 +113,9 @@ function App() {
     const steam = params.get("steam");
     if (steam === "linked") setSteamStatus("Steam account linked.");
     if (steam === "failed") setSteamStatus("Steam link failed.");
+    if (steam) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
   }, []);
 
   async function loadInitialData() {
@@ -126,19 +136,23 @@ function App() {
 
   async function saveTierList() {
     setSaveStatus("Saving...");
-    const payload = {
-      tiers: tierState.tiers,
-      unranked: tierState.unranked
-    };
-    const resp = await fetch("/api/v1/tier-list/state", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    if (resp.ok) {
-      setSaveStatus("Saved");
-      setTimeout(() => setSaveStatus(""), 1000);
-    } else {
+    try {
+      const payload = {
+        tiers: tierState.tiers,
+        unranked: tierState.unranked
+      };
+      const resp = await fetch("/api/v1/tier-list/state", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (resp.ok) {
+        setSaveStatus("Saved");
+        setTimeout(() => setSaveStatus(""), 1200);
+      } else {
+        setSaveStatus("Save failed");
+      }
+    } catch {
       setSaveStatus("Save failed");
     }
   }
@@ -152,7 +166,10 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ platform: accountPlatform, accountName: accountName.trim() })
     });
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      setSteamStatus("Account link failed.");
+      return;
+    }
     const json = await resp.json();
     setLinkedAccounts((prev) => [...prev, json.linked]);
     setAccountName("");
@@ -160,16 +177,20 @@ function App() {
 
   async function syncSteamAccount(accountId: string) {
     setSyncingAccountId(accountId);
-    const resp = await fetch(`/api/v1/accounts/steam/sync/${accountId}`, { method: "POST" });
-    if (resp.ok) {
-      const bootstrapResp = await fetch("/api/v1/bootstrap");
-      const bootstrap = await bootstrapResp.json();
-      setGames(bootstrap?.games ?? []);
-      setTierState(bootstrap?.tierListState ?? DEFAULT_TIER_STATE);
-      setSteamStatus("Steam library synced.");
-    } else {
-      const error = await resp.json().catch(() => null);
-      setSteamStatus(error?.error ?? "Steam sync failed.");
+    try {
+      const resp = await fetch(`/api/v1/accounts/steam/sync/${accountId}`, { method: "POST" });
+      if (resp.ok) {
+        const bootstrapResp = await fetch("/api/v1/bootstrap");
+        const bootstrap = await bootstrapResp.json();
+        setGames(bootstrap?.games ?? []);
+        setTierState(bootstrap?.tierListState ?? DEFAULT_TIER_STATE);
+        setSteamStatus("Steam library synced.");
+      } else {
+        const error = await resp.json().catch(() => null);
+        setSteamStatus(error?.error ?? "Steam sync failed.");
+      }
+    } catch {
+      setSteamStatus("Steam sync failed.");
     }
     setSyncingAccountId(null);
   }
@@ -177,13 +198,17 @@ function App() {
   async function searchMetadata() {
     if (manualQuery.trim().length < 2) return;
     setSearching(true);
-    const resp = await fetch("/api/v1/metadata/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: manualQuery.trim() })
-    });
-    const json = await resp.json();
-    setSearchResults(json.results ?? []);
+    try {
+      const resp = await fetch("/api/v1/metadata/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: manualQuery.trim() })
+      });
+      const json = await resp.json();
+      setSearchResults(json.results ?? []);
+    } catch {
+      setSearchResults([]);
+    }
     setSearching(false);
   }
 
@@ -206,7 +231,10 @@ function App() {
       })
     });
 
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      setSaveStatus("Add failed");
+      return;
+    }
     const json = await resp.json();
     setGames((prev) => [...prev, json.game]);
     setTierState((prev) => ({ ...prev, unranked: [...prev.unranked, json.game.id] }));
@@ -220,7 +248,10 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ gameIds: selectedGameIds })
     });
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      setSaveStatus("Remove failed");
+      return;
+    }
 
     const removeSet = new Set(selectedGameIds);
     setGames((prev) => prev.filter((g) => !removeSet.has(g.id)));
@@ -246,6 +277,8 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ themeId: theme.id })
     });
+    setSaveStatus(`Theme set: ${theme.name}`);
+    setTimeout(() => setSaveStatus(""), 1200);
   }
 
   function ensureGameInBuckets(gameId: string, target: TierKey | "UNRANKED", insertIndex?: number) {
@@ -300,7 +333,7 @@ function App() {
     const { jsPDF } = await import("jspdf");
     const doc = new jsPDF({ unit: "pt", format: "a4" });
     doc.setFontSize(18);
-    doc.text("EveryGame Tier List", 40, 40);
+    doc.text("Tier List Your Games", 40, 40);
     doc.setFontSize(10);
     doc.text(`Theme: ${themeId}`, 40, 58);
     doc.text(`Exported: ${new Date().toLocaleString()}`, 40, 72);
@@ -327,7 +360,7 @@ function App() {
     doc.text("Unranked", 40, y + 8);
     doc.setFontSize(10);
     doc.text(unrankedNames.length ? unrankedNames.join(", ").slice(0, 180) : "(empty)", 110, y + 8);
-    doc.save("everygame-tier-list.pdf");
+    doc.save("tier-list-your-games.pdf");
   }
 
   const genres = useMemo(() => ["All", ...Array.from(new Set(games.map((g) => g.genre))).sort()], [games]);
@@ -430,7 +463,7 @@ function App() {
             {PLATFORM_OPTIONS.map((p) => (
               <div className="platform-card" key={p.name}>
                 <strong>{p.name}</strong>
-                <span className={`status status-${p.status}`}>{p.status}</span>
+                <span className={`status status-${p.status}`}>{statusLabel(p.status)}</span>
               </div>
             ))}
           </div>
@@ -466,6 +499,9 @@ function App() {
               <span>{saveStatus}</span>
             </div>
           </div>
+          {tierState.updatedAt && (
+            <p className="muted-note">Last saved: {new Date(tierState.updatedAt).toLocaleString()}</p>
+          )}
 
           {games.length === 0 && (
             <p>
@@ -582,6 +618,9 @@ function App() {
                   <button onClick={() => addGameFromSearch(r)}>Add</button>
                 </div>
               ))}
+              {!searching && manualQuery.trim().length >= 2 && searchResults.length === 0 && (
+                <p className="muted-note">No results found. Try a broader title.</p>
+              )}
             </div>
           </div>
 
@@ -606,6 +645,7 @@ function App() {
                 </div>
               </label>
             ))}
+            {filteredGames.length === 0 && <p className="muted-note">No games match your current filters.</p>}
           </div>
         </main>
       )}
