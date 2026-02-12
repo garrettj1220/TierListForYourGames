@@ -1,0 +1,26 @@
+:root {
+  font-family: "SF Pro Text", "Segoe UI", "Inter", sans-serif;
+  --bg: linear-gradient(145deg, #fbfbff 0%, #f2f7ff 100%);
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-alt: rgba(255, 255, 255, 0.84);
+  --text: #0f172a;
+  --muted: #4b5563;
+  --accent: #2563eb;
+  --accent-2: #0ea5e9;
+  --tier-s: #f59e0b;
+  --tier-a: #60a5fa;
+  --tier-b: #34d399;
+  --tier-c: #facc15;
+  --tier-d: #fb923c;
+  --tier-f: #ef4444;
+  --bg-image: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}

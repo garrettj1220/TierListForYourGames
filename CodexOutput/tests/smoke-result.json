@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "steps": [
+    "loaded_app",
+    "opened_games_list",
+    "added_manual_game",
+    "opened_editor",
+    "dragged_to_s_tier",
+    "saved_tier_state",
+    "applied_theme",
+    "screenshot:/Users/garrettjohnson/Desktop/Tools/Tier List Your Games/CodexOutput/screenshots/smoke-after-theme.png"
+  ]
+}
