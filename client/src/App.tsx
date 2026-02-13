@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 type Screen = "setup" | "accounts" | "games" | "editor";
@@ -74,6 +74,7 @@ function App() {
   const [dragGameId, setDragGameId] = useState<string | null>(null);
   const [dragOrigin, setDragOrigin] = useState<DragLocation | null>(null);
   const [dragOver, setDragOver] = useState<DragLocation | null>(null);
+  const [originPlaceholderActive, setOriginPlaceholderActive] = useState(false);
   const [dropFlashTarget, setDropFlashTarget] = useState<DropTarget | null>(null);
   const [status, setStatus] = useState("");
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
@@ -87,6 +88,7 @@ function App() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchSource, setSearchSource] = useState<"local" | "external">("local");
   const [searching, setSearching] = useState(false);
+  const dragImageRef = useRef<HTMLElement | null>(null);
 
   const gameMap = useMemo(() => {
     const map = new Map<string, Game>();
@@ -392,14 +394,41 @@ function App() {
     setDragGameId(gameId);
     setDragOrigin({ target, index });
     setDragOver({ target, index });
+    setOriginPlaceholderActive(false);
+
+    const sourceEl = e.currentTarget;
+    const clone = sourceEl.cloneNode(true) as HTMLElement;
+    const rect = sourceEl.getBoundingClientRect();
+    clone.style.position = "fixed";
+    clone.style.top = "-10000px";
+    clone.style.left = "-10000px";
+    clone.style.width = `${Math.round(rect.width)}px`;
+    clone.style.height = `${Math.round(rect.height)}px`;
+    clone.style.margin = "0";
+    clone.style.pointerEvents = "none";
+    clone.style.transform = "none";
+    clone.classList.remove("is-origin-placeholder");
+    document.body.appendChild(clone);
+    dragImageRef.current = clone;
+
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", gameId);
+    e.dataTransfer.setDragImage(clone, rect.width / 2, rect.height / 2);
+
+    window.requestAnimationFrame(() => {
+      setOriginPlaceholderActive(true);
+    });
   }
 
   function endDrag() {
+    if (dragImageRef.current) {
+      dragImageRef.current.remove();
+      dragImageRef.current = null;
+    }
     setDragGameId(null);
     setDragOrigin(null);
     setDragOver(null);
+    setOriginPlaceholderActive(false);
   }
 
   function onRowDragOver(target: DropTarget, e: React.DragEvent<HTMLElement>) {
@@ -573,14 +602,14 @@ function App() {
                           <div className="tier-insert-slot" aria-hidden="true" />
                         )}
                         <article
-                          className={`tier-game ${dragGameId === id && dragOrigin?.target === tier && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
+                          className={`tier-game ${dragGameId === id && originPlaceholderActive && dragOrigin?.target === tier && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
                           draggable
                           onDragStart={(e) => startDrag(id, tier, idx, e)}
                           onDragEnd={endDrag}
                           onDragOver={(e) => onCardDragOver(tier, idx, e)}
                           onDrop={() => onRowDrop(tier, idx)}
                         >
-                          {dragGameId === id && dragOrigin?.target === tier && dragOrigin.index === idx ? (
+                          {dragGameId === id && originPlaceholderActive && dragOrigin?.target === tier && dragOrigin.index === idx ? (
                             <div className="tier-origin-placeholder" />
                           ) : game.coverArtUrl ? (
                             <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
@@ -617,14 +646,14 @@ function App() {
                         <div className="tier-insert-slot" aria-hidden="true" />
                       )}
                       <article
-                        className={`tier-game ${dragGameId === id && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
+                        className={`tier-game ${dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
                         draggable
                         onDragStart={(e) => startDrag(id, "UNRANKED", idx, e)}
                         onDragEnd={endDrag}
                         onDragOver={(e) => onCardDragOver("UNRANKED", idx, e)}
                         onDrop={() => onRowDrop("UNRANKED", idx)}
                       >
-                        {dragGameId === id && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? (
+                        {dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? (
                           <div className="tier-origin-placeholder" />
                         ) : game.coverArtUrl ? (
                           <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />

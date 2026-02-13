@@ -295,31 +295,23 @@ body {
 .tier-row header {
   display: flex;
   align-items: center;
+  margin-bottom: 2px;
 }
 
 .tier-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 38px;
-  padding: 3px 10px 4px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, #ffffff, var(--line) 68%);
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08));
-  box-shadow:
-    0 2px 10px rgba(0, 0, 0, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.42);
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  display: inline-block;
+  padding: 0 0 4px;
+  border-bottom: 2px solid color-mix(in srgb, #ffffff, var(--line) 45%);
+  font-weight: 900;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: #f8fbff;
-  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  text-shadow: 0 2px 8px rgba(15, 23, 42, 0.65);
 }
 
 .tier-pool .tier-label {
   color: #dbeafe;
-  border-color: color-mix(in srgb, #93c5fd, var(--line) 72%);
-  background: linear-gradient(145deg, rgba(30, 41, 59, 0.72), rgba(15, 23, 42, 0.44));
+  border-bottom-color: color-mix(in srgb, #93c5fd, var(--line) 55%);
 }
 
 .tier-S {
@@ -355,6 +347,7 @@ body {
   grid-template-columns: repeat(10, minmax(0, 1fr));
   gap: 8px;
   align-items: start;
+  min-height: 150px;
 }
 
 .tier-item-slot {
@@ -379,6 +372,8 @@ body {
   display: grid;
   gap: 6px;
   align-content: start;
+  cursor: grab;
+  user-select: none;
 }
 
 .tier-game.is-origin-placeholder {
@@ -391,6 +386,10 @@ body {
   aspect-ratio: 264 / 374;
   border-radius: 6px;
   background: color-mix(in srgb, #6b7280, var(--panel) 45%);
+}
+
+.tier-game:active {
+  cursor: grabbing;
 }
 
 .tier-game img {
