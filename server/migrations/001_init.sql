@@ -72,5 +72,5 @@ VALUES (
 ON CONFLICT (user_id) DO NOTHING;
 
 INSERT INTO user_theme_settings (user_id, theme_id)
-VALUES ('demo-user', 'apple-glass-white-default')
+VALUES ('demo-user', 'dark')
 ON CONFLICT (user_id) DO NOTHING;

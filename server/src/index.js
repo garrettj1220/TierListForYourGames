@@ -32,7 +32,7 @@ app.get("/api/v1/health", (_req, res) => {
 });
 
 app.get("/api/v1/themes", (_req, res) => {
-  res.json({ themes: themeCatalog, defaultThemeId: "apple-glass-white-default" });
+  res.json({ themes: themeCatalog, defaultThemeId: "dark" });
 });
 
 app.get("/api/v1/bootstrap", async (_req, res) => {
@@ -52,6 +52,12 @@ app.post("/api/v1/accounts/link", async (req, res) => {
   }
   const linked = await storage.linkAccount(USER_ID, { platform, accountName });
   return res.status(201).json({ linked });
+});
+
+app.delete("/api/v1/accounts/:accountId", async (req, res) => {
+  const result = await storage.removeAccount(USER_ID, req.params.accountId);
+  if (!result.removed) return res.status(404).json({ error: "account not found" });
+  return res.json({ ok: true, ...result });
 });
 
 app.get("/api/v1/accounts/steam/start", (_req, res) => {
@@ -99,12 +105,30 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
       return res.redirect(`${frontendUrl()}/?steam=failed`);
     }
 
-    await storage.linkAccount(USER_ID, {
+    const linked = await storage.linkAccount(USER_ID, {
       platform: "Steam",
       accountName: `Steam ${steamId.slice(-4)}`,
       externalUserId: steamId,
       metadata: { steamId }
     });
+
+    if (process.env.STEAM_WEB_API_KEY) {
+      try {
+        const steamParams = new URLSearchParams({
+          key: process.env.STEAM_WEB_API_KEY,
+          steamid: steamId,
+          include_appinfo: "1",
+          include_played_free_games: "1",
+          format: "json"
+        });
+        const steamResp = await fetch(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?${steamParams.toString()}`);
+        const steamJson = await steamResp.json();
+        const games = steamJson?.response?.games ?? [];
+        await storage.ingestSteamLibrary(USER_ID, linked.id, games);
+      } catch {
+        // Callback should still complete even if background sync fails.
+      }
+    }
 
     return res.redirect(`${frontendUrl()}/?steam=linked`);
   } catch {
@@ -112,16 +136,11 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
   }
 });
 
-app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
+async function fetchSteamOwnedGames(steamId) {
   const steamApiKey = process.env.STEAM_WEB_API_KEY;
-  if (!steamApiKey) return res.status(400).json({ error: "STEAM_WEB_API_KEY is required" });
-
-  const account = await storage.getAccount(USER_ID, req.params.accountId);
-  const steamId = account?.external_user_id ?? account?.externalUserId;
-  if (!account || account.platform !== "Steam" || !steamId) {
-    return res.status(404).json({ error: "Steam account not found" });
+  if (!steamApiKey) {
+    throw new Error("STEAM_WEB_API_KEY is required");
   }
-
   const params = new URLSearchParams({
     key: steamApiKey,
     steamid: steamId,
@@ -129,16 +148,60 @@ app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
     include_played_free_games: "1",
     format: "json"
   });
+  const response = await fetch(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?${params.toString()}`);
+  const json = await response.json();
+  return json?.response?.games ?? [];
+}
+
+app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
+  const account = await storage.getAccount(USER_ID, req.params.accountId);
+  const steamId = account?.external_user_id ?? account?.externalUserId;
+  if (!account || account.platform !== "Steam" || !steamId) {
+    return res.status(404).json({ error: "Steam account not found" });
+  }
 
   try {
-    const response = await fetch(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?${params.toString()}`);
-    const json = await response.json();
-    const games = json?.response?.games ?? [];
+    const games = await fetchSteamOwnedGames(steamId);
     const summary = await storage.ingestSteamLibrary(USER_ID, account.id, games);
     return res.json({ ok: true, source: "steam", count: games.length, ...summary });
   } catch (error) {
     return res.status(500).json({ error: "Steam sync failed", details: String(error) });
   }
+});
+
+app.post("/api/v1/accounts/sync-all", async (_req, res) => {
+  const accounts = await storage.getLinkedAccounts(USER_ID);
+  const result = {
+    scanned: accounts.length,
+    inserted: 0,
+    updated: 0,
+    synced: 0,
+    skipped: []
+  };
+
+  for (const account of accounts) {
+    const platform = String(account.platform || "");
+    if (platform !== "Steam") {
+      result.skipped.push({ accountId: account.id, platform, reason: "Sync not implemented for this platform yet" });
+      continue;
+    }
+    const steamId = account.external_user_id ?? account.externalUserId;
+    if (!steamId) {
+      result.skipped.push({ accountId: account.id, platform, reason: "Missing Steam user id" });
+      continue;
+    }
+    try {
+      const games = await fetchSteamOwnedGames(steamId);
+      const summary = await storage.ingestSteamLibrary(USER_ID, account.id, games);
+      result.synced += 1;
+      result.inserted += Number(summary.inserted ?? 0);
+      result.updated += Number(summary.updated ?? 0);
+    } catch (error) {
+      result.skipped.push({ accountId: account.id, platform, reason: String(error) });
+    }
+  }
+
+  return res.json({ ok: true, ...result });
 });
 
 app.put("/api/v1/users/me/theme", async (req, res) => {
@@ -160,11 +223,20 @@ app.get("/api/v1/games", async (_req, res) => {
 });
 
 app.post("/api/v1/games/manual", async (req, res) => {
-  const { title, platform, genre, popularity = 50, coverArtUrl } = req.body ?? {};
+  const { title, platform, genre, popularity = 50, coverArtUrl, sourceKey, metadata, manuallyAdded } = req.body ?? {};
   if (!title) {
     return res.status(400).json({ error: "title is required" });
   }
-  const game = await storage.addManualGame(USER_ID, { title, platform, genre, popularity, coverArtUrl });
+  const game = await storage.addManualGame(USER_ID, {
+    title,
+    platform,
+    genre,
+    popularity,
+    coverArtUrl,
+    sourceKey,
+    metadata,
+    manuallyAdded
+  });
   res.status(201).json({ game });
 });
 
@@ -186,12 +258,8 @@ app.put("/api/v1/tier-list/state", async (req, res) => {
   res.json({ ok: true, tierListState });
 });
 
-app.post("/api/v1/metadata/search", async (req, res) => {
-  const { query } = req.body ?? {};
-  if (!query || String(query).trim().length < 2) {
-    return res.status(400).json({ error: "query must be at least 2 characters" });
-  }
-
+async function externalSearch(query) {
+  const normalized = String(query).trim();
   const apiKey = process.env.THEGAMESDB_API_KEY;
   if (!apiKey) {
     const base = [
@@ -201,32 +269,73 @@ app.post("/api/v1/metadata/search", async (req, res) => {
       { title: "Hades", platform: "Steam", genre: "Roguelike", popularity: 93 },
       { title: "Fortnite", platform: "Epic Games", genre: "Battle Royale", popularity: 99 }
     ];
-    const matches = base
-      .filter((g) => g.title.toLowerCase().includes(String(query).toLowerCase()))
+    return base
+      .filter((g) => g.title.toLowerCase().includes(normalized.toLowerCase()))
       .slice(0, 10)
-      .map((g) => ({
+      .map((g, idx) => ({
         ...g,
-        coverArtUrl: `https://placehold.co/240x320/f8fafc/111827?text=${encodeURIComponent(g.title.slice(0, 18))}`
+        source: "mock",
+        externalId: `mock-${idx}-${g.title}`,
+        sourceKey: `mock:${g.platform}:${g.title.toLowerCase()}`,
+        coverArtUrl: `https://placehold.co/240x320/f8fafc/111827?text=${encodeURIComponent(g.title.slice(0, 18))}`,
+        metadata: {}
       }));
-    return res.json({ source: "mock", results: matches });
   }
 
+  const params = new URLSearchParams({
+    apikey: apiKey,
+    name: normalized
+  });
+  const resp = await fetch(`https://api.thegamesdb.net/v1/Games/ByGameName?${params.toString()}`);
+  const json = await resp.json();
+  const games = json?.data?.games ?? [];
+  return games.slice(0, 20).map((g) => ({
+    title: g.game_title,
+    platform: g.platform || "Unknown",
+    genre: "Unknown",
+    popularity: 50,
+    coverArtUrl: null,
+    source: "thegamesdb",
+    externalId: g.id,
+    sourceKey: `thegamesdb:${g.id}`,
+    metadata: { theGamesDbId: g.id }
+  }));
+}
+
+app.post("/api/v1/metadata/search/local", async (req, res) => {
+  const { query } = req.body ?? {};
+  if (!query || String(query).trim().length < 2) {
+    return res.status(400).json({ error: "query must be at least 2 characters" });
+  }
+  const results = await storage.searchCatalog(query);
+  return res.json({ source: "local", results });
+});
+
+app.post("/api/v1/metadata/search/external", async (req, res) => {
+  const { query } = req.body ?? {};
+  if (!query || String(query).trim().length < 2) {
+    return res.status(400).json({ error: "query must be at least 2 characters" });
+  }
   try {
-    const params = new URLSearchParams({
-      apikey: apiKey,
-      name: String(query)
-    });
-    const resp = await fetch(`https://api.thegamesdb.net/v1/Games/ByGameName?${params.toString()}`);
-    const json = await resp.json();
-    const games = json?.data?.games ?? [];
-    const results = games.slice(0, 10).map((g) => ({
-      title: g.game_title,
-      platform: g.platform || "Unknown",
-      genre: "Unknown",
-      popularity: 50,
-      coverArtUrl: null
-    }));
-    return res.json({ source: "thegamesdb", results });
+    const results = await externalSearch(query);
+    return res.json({ source: "external", results });
+  } catch (error) {
+    return res.status(500).json({ error: "metadata search failed", details: String(error) });
+  }
+});
+
+app.post("/api/v1/metadata/search", async (req, res) => {
+  const { query, mode = "local" } = req.body ?? {};
+  if (!query || String(query).trim().length < 2) {
+    return res.status(400).json({ error: "query must be at least 2 characters" });
+  }
+  try {
+    if (mode === "external") {
+      const results = await externalSearch(query);
+      return res.json({ source: "external", results });
+    }
+    const results = await storage.searchCatalog(query);
+    return res.json({ source: "local", results });
   } catch (error) {
     return res.status(500).json({ error: "metadata search failed", details: String(error) });
   }

@@ -3,9 +3,14 @@ import { createId, nowIso, readDb, writeDb } from "./db.js";
 
 const DEFAULT_TIERS = { S: [], A: [], B: [], C: [], D: [], F: [] };
 
+function makeSourceKey(title, platform = "Manual") {
+  return `manual:${String(title).trim().toLowerCase()}:${String(platform).trim().toLowerCase()}`;
+}
+
 function normalizeGameRecord(record) {
   return {
     id: record.id,
+    sourceKey: record.source_key ?? record.sourceKey ?? null,
     title: record.title,
     platform: record.platform,
     genre: record.genre,
@@ -31,7 +36,7 @@ class JsonStorage {
       linkedAccounts: db.linkedAccounts.filter((a) => a.userId === userId),
       games: db.userGames.filter((g) => g.userId === userId),
       tierListState: db.tierListState ?? { userId, tiers: DEFAULT_TIERS, unranked: [], updatedAt: null },
-      theme: db.userThemeSettings ?? { userId, themeId: "apple-glass-white-default" }
+      theme: db.userThemeSettings ?? { userId, themeId: "light" }
     };
   }
 
@@ -62,6 +67,14 @@ class JsonStorage {
     return db.linkedAccounts.find((a) => a.userId === userId && a.id === accountId) ?? null;
   }
 
+  async removeAccount(userId, accountId) {
+    const db = await readDb();
+    const before = db.linkedAccounts.length;
+    db.linkedAccounts = db.linkedAccounts.filter((a) => !(a.userId === userId && a.id === accountId));
+    await writeDb(db);
+    return { removed: before - db.linkedAccounts.length };
+  }
+
   async setTheme(userId, themeId) {
     const db = await readDb();
     db.userThemeSettings = { userId, themeId };
@@ -74,28 +87,66 @@ class JsonStorage {
     return db.userGames.filter((g) => g.userId === userId);
   }
 
+  async searchCatalog(query) {
+    const db = await readDb();
+    const q = String(query).toLowerCase();
+    const catalog = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
+    return catalog
+      .filter((g) => String(g.title).toLowerCase().includes(q))
+      .slice(0, 20)
+      .map((g) =>
+        normalizeGameRecord({
+          ...g,
+          sourceKey: g.sourceKey || g.source_key || null,
+          playtimeMinutes: 0,
+          manuallyAdded: false
+        })
+      );
+  }
+
   async addManualGame(userId, gameInput) {
     const db = await readDb();
-    const game = {
-      id: createId("game"),
-      userId,
-      title: gameInput.title,
-      platform: gameInput.platform || "Manual",
-      genre: gameInput.genre || "Unknown",
-      popularity: Number(gameInput.popularity) || 50,
-      playtimeMinutes: 0,
-      coverArtUrl:
-        gameInput.coverArtUrl ||
-        `https://placehold.co/240x320/eef2ff/0f172a?text=${encodeURIComponent(gameInput.title.slice(0, 18))}`,
-      manuallyAdded: true,
-      createdAt: nowIso()
-    };
+    db.gamesNormalized = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
+    const sourceKey = gameInput.sourceKey || makeSourceKey(gameInput.title, gameInput.platform || "Manual");
+    const coverArtUrl =
+      gameInput.coverArtUrl ||
+      `https://placehold.co/240x320/eef2ff/0f172a?text=${encodeURIComponent(gameInput.title.slice(0, 18))}`;
 
-    db.userGames.push(game);
-    db.tierListState.unranked = Array.from(new Set([...(db.tierListState.unranked ?? []), game.id]));
+    let catalogGame = db.gamesNormalized.find((g) => g.sourceKey === sourceKey);
+    if (!catalogGame) {
+      catalogGame = {
+        id: createId("game"),
+        sourceKey,
+        title: gameInput.title,
+        platform: gameInput.platform || "Manual",
+        genre: gameInput.genre || "Unknown",
+        popularity: Number(gameInput.popularity) || 50,
+        coverArtUrl,
+        metadata: gameInput.metadata || {}
+      };
+      db.gamesNormalized.push(catalogGame);
+    }
+
+    const existingUserGame = db.userGames.find((g) => g.userId === userId && g.id === catalogGame.id);
+    if (!existingUserGame) {
+      db.userGames.push({
+        id: catalogGame.id,
+        userId,
+        title: catalogGame.title,
+        platform: catalogGame.platform,
+        genre: catalogGame.genre,
+        popularity: Number(catalogGame.popularity) || 50,
+        playtimeMinutes: 0,
+        coverArtUrl: catalogGame.coverArtUrl || coverArtUrl,
+        manuallyAdded: Boolean(gameInput.manuallyAdded ?? true),
+        createdAt: nowIso()
+      });
+    }
+
+    db.tierListState.unranked = Array.from(new Set([...(db.tierListState.unranked ?? []), catalogGame.id]));
     db.tierListState.updatedAt = nowIso();
     await writeDb(db);
-    return game;
+    return db.userGames.find((g) => g.userId === userId && g.id === catalogGame.id);
   }
 
   async removeGames(userId, gameIds) {
@@ -120,33 +171,51 @@ class JsonStorage {
 
   async ingestSteamLibrary(userId, _accountId, ownedGames) {
     const db = await readDb();
+    db.gamesNormalized = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
     let inserted = 0;
     let updated = 0;
     for (const raw of ownedGames) {
       const title = raw.name || `Steam App ${raw.appid}`;
-      const existing = db.userGames.find((g) => g.userId === userId && g.title === title && g.platform === "Steam");
-      if (existing) {
-        existing.playtimeMinutes = raw.playtime_forever ?? existing.playtimeMinutes ?? 0;
+      const sourceKey = `steam:${raw.appid}`;
+      let catalogGame = db.gamesNormalized.find((g) => g.sourceKey === sourceKey);
+      if (!catalogGame) {
+        catalogGame = {
+          id: createId("game"),
+          sourceKey,
+          title,
+          platform: "Steam",
+          genre: "Unknown",
+          popularity: 70,
+          coverArtUrl: `https://cdn.cloudflare.steamstatic.com/steam/apps/${raw.appid}/library_600x900_2x.jpg`,
+          metadata: { steamAppId: raw.appid }
+        };
+        db.gamesNormalized.push(catalogGame);
+        inserted += 1;
+      } else {
+        catalogGame.title = title;
+        catalogGame.coverArtUrl = `https://cdn.cloudflare.steamstatic.com/steam/apps/${raw.appid}/library_600x900_2x.jpg`;
         updated += 1;
-        continue;
       }
 
-      const created = {
-        id: createId("game"),
-        userId,
-        title,
-        platform: "Steam",
-        genre: "Unknown",
-        popularity: 70,
-        playtimeMinutes: raw.playtime_forever ?? 0,
-        coverArtUrl: `https://cdn.cloudflare.steamstatic.com/steam/apps/${raw.appid}/library_600x900_2x.jpg`,
-        manuallyAdded: false,
-        sourcePlatformIds: { steamAppId: raw.appid },
-        createdAt: nowIso()
-      };
-      db.userGames.push(created);
-      db.tierListState.unranked = Array.from(new Set([...(db.tierListState.unranked ?? []), created.id]));
-      inserted += 1;
+      const existing = db.userGames.find((g) => g.userId === userId && g.id === catalogGame.id);
+      if (existing) {
+        existing.playtimeMinutes = raw.playtime_forever ?? existing.playtimeMinutes ?? 0;
+        existing.coverArtUrl = catalogGame.coverArtUrl;
+      } else {
+        db.userGames.push({
+          id: catalogGame.id,
+          userId,
+          title: catalogGame.title,
+          platform: catalogGame.platform,
+          genre: catalogGame.genre,
+          popularity: Number(catalogGame.popularity) || 70,
+          playtimeMinutes: raw.playtime_forever ?? 0,
+          coverArtUrl: catalogGame.coverArtUrl,
+          manuallyAdded: false,
+          createdAt: nowIso()
+        });
+      }
+      db.tierListState.unranked = Array.from(new Set([...(db.tierListState.unranked ?? []), catalogGame.id]));
     }
     db.tierListState.updatedAt = nowIso();
     await writeDb(db);
@@ -191,7 +260,7 @@ class PgStorage {
           : { userId, tiers: DEFAULT_TIERS, unranked: [], updatedAt: null },
         theme: themeResult.rows[0]
           ? { userId, themeId: themeResult.rows[0].theme_id }
-          : { userId, themeId: "apple-glass-white-default" }
+          : { userId, themeId: "light" }
       };
     } finally {
       client.release();
@@ -224,6 +293,11 @@ class PgStorage {
     return result.rows[0] ?? null;
   }
 
+  async removeAccount(userId, accountId) {
+    const result = await this.pool.query("DELETE FROM linked_accounts WHERE user_id = $1 AND id = $2", [userId, accountId]);
+    return { removed: result.rowCount || 0 };
+  }
+
   async setTheme(userId, themeId) {
     await this.pool.query(
       `INSERT INTO user_theme_settings (user_id, theme_id)
@@ -246,28 +320,56 @@ class PgStorage {
     return result.rows.map(normalizeGameRecord);
   }
 
+  async searchCatalog(query) {
+    const result = await this.pool.query(
+      `SELECT id, source_key, title, platform, genre, popularity, cover_art_url, 0 AS playtime_minutes, FALSE AS manually_added
+       FROM games_normalized
+       WHERE title ILIKE $1
+       ORDER BY title ASC
+       LIMIT 20`,
+      [`%${String(query).trim()}%`]
+    );
+    return result.rows.map(normalizeGameRecord);
+  }
+
   async addManualGame(userId, gameInput) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      const sourceKey = gameInput.sourceKey || makeSourceKey(gameInput.title, gameInput.platform || "Manual");
+      const coverArtUrl =
+        gameInput.coverArtUrl ||
+        `https://placehold.co/240x320/eef2ff/0f172a?text=${encodeURIComponent(gameInput.title.slice(0, 18))}`;
       const gameId = createId("game");
-      await client.query(
+      const persisted = await client.query(
         `INSERT INTO games_normalized (id, source_key, title, platform, genre, popularity, cover_art_url, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+         ON CONFLICT (source_key) DO UPDATE
+         SET title = EXCLUDED.title,
+             platform = EXCLUDED.platform,
+             genre = EXCLUDED.genre,
+             popularity = EXCLUDED.popularity,
+             cover_art_url = EXCLUDED.cover_art_url,
+             metadata = COALESCE(games_normalized.metadata, '{}'::jsonb) || EXCLUDED.metadata
+         RETURNING id, title, platform, genre, popularity, cover_art_url`,
         [
           gameId,
-          `manual:${gameInput.title.toLowerCase()}:${gameInput.platform || "Manual"}`,
+          sourceKey,
           gameInput.title,
           gameInput.platform || "Manual",
           gameInput.genre || "Unknown",
           Number(gameInput.popularity) || 50,
-          gameInput.coverArtUrl ||
-            `https://placehold.co/240x320/eef2ff/0f172a?text=${encodeURIComponent(gameInput.title.slice(0, 18))}`
+          coverArtUrl,
+          JSON.stringify(gameInput.metadata || {})
         ]
       );
+      const persistedGame = persisted.rows[0];
+      const persistedGameId = persistedGame.id;
       await client.query(
-        "INSERT INTO user_games (user_id, game_id, playtime_minutes, manually_added) VALUES ($1, $2, 0, TRUE)",
-        [userId, gameId]
+        `INSERT INTO user_games (user_id, game_id, playtime_minutes, manually_added)
+         VALUES ($1, $2, 0, $3)
+         ON CONFLICT (user_id, game_id) DO NOTHING`,
+        [userId, persistedGameId, Boolean(gameInput.manuallyAdded ?? true)]
       );
       await client.query(
         `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
@@ -276,23 +378,21 @@ class PgStorage {
         [userId, JSON.stringify(DEFAULT_TIERS), JSON.stringify([])]
       );
       const state = await client.query("SELECT tiers, unranked FROM tier_list_states WHERE user_id = $1", [userId]);
-      const unranked = Array.from(new Set([...(state.rows[0]?.unranked ?? []), gameId]));
+      const unranked = Array.from(new Set([...(state.rows[0]?.unranked ?? []), persistedGameId]));
       await client.query("UPDATE tier_list_states SET unranked = $1::jsonb, updated_at = NOW() WHERE user_id = $2", [
         JSON.stringify(unranked),
         userId
       ]);
       await client.query("COMMIT");
       return {
-        id: gameId,
-        title: gameInput.title,
-        platform: gameInput.platform || "Manual",
-        genre: gameInput.genre || "Unknown",
-        popularity: Number(gameInput.popularity) || 50,
+        id: persistedGameId,
+        title: persistedGame.title,
+        platform: persistedGame.platform,
+        genre: persistedGame.genre,
+        popularity: Number(persistedGame.popularity) || 50,
         playtimeMinutes: 0,
-        coverArtUrl:
-          gameInput.coverArtUrl ||
-          `https://placehold.co/240x320/eef2ff/0f172a?text=${encodeURIComponent(gameInput.title.slice(0, 18))}`,
-        manuallyAdded: true
+        coverArtUrl: persistedGame.cover_art_url || coverArtUrl,
+        manuallyAdded: Boolean(gameInput.manuallyAdded ?? true)
       };
     } catch (error) {
       await client.query("ROLLBACK");
