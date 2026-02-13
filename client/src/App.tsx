@@ -5,6 +5,7 @@ type Screen = "setup" | "accounts" | "games" | "editor";
 type TierKey = "S" | "A" | "B" | "C" | "D" | "F";
 type ThemeMode = "dark" | "light";
 type DropTarget = TierKey | "UNRANKED";
+type DragLocation = { target: DropTarget; index: number };
 
 type Game = {
   id: string;
@@ -71,6 +72,8 @@ function App() {
   const [games, setGames] = useState<Game[]>([]);
   const [tierState, setTierState] = useState<TierListState>(DEFAULT_TIER_STATE);
   const [dragGameId, setDragGameId] = useState<string | null>(null);
+  const [dragOrigin, setDragOrigin] = useState<DragLocation | null>(null);
+  const [dragOver, setDragOver] = useState<DragLocation | null>(null);
   const [dropFlashTarget, setDropFlashTarget] = useState<DropTarget | null>(null);
   const [status, setStatus] = useState("");
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
@@ -327,6 +330,7 @@ function App() {
   }
 
   function dropGame(gameId: string, target: DropTarget, insertIndex?: number) {
+    const dropIndex = Math.max(0, Number(insertIndex ?? 0));
     setDropFlashTarget(target);
     setTierState((prev) => {
       const next: TierListState = {
@@ -336,10 +340,16 @@ function App() {
       };
       next.unranked = next.unranked.filter((id) => id !== gameId);
       for (const key of TIER_KEYS) next.tiers[key] = next.tiers[key].filter((id) => id !== gameId);
-      if (target === "UNRANKED") next.unranked.splice(insertIndex ?? next.unranked.length, 0, gameId);
-      else next.tiers[target].splice(insertIndex ?? next.tiers[target].length, 0, gameId);
+      if (target === "UNRANKED") {
+        next.unranked.splice(Math.min(dropIndex, next.unranked.length), 0, gameId);
+      } else {
+        next.tiers[target].splice(Math.min(dropIndex, next.tiers[target].length), 0, gameId);
+      }
       return next;
     });
+    setDragOver(null);
+    setDragOrigin(null);
+    setDragGameId(null);
   }
 
   async function exportPdf() {
@@ -366,6 +376,49 @@ function App() {
   }
 
   if (loading) return <div className="app-shell loading">Loading...</div>;
+
+  function idsForTarget(target: DropTarget) {
+    return target === "UNRANKED" ? tierState.unranked : tierState.tiers[target];
+  }
+
+  function resolveDropIndex(target: DropTarget, fallbackIndex?: number) {
+    const ids = idsForTarget(target);
+    if (dragOver?.target === target) return dragOver.index;
+    if (typeof fallbackIndex === "number") return fallbackIndex;
+    return ids.length;
+  }
+
+  function startDrag(gameId: string, target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
+    setDragGameId(gameId);
+    setDragOrigin({ target, index });
+    setDragOver({ target, index });
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", gameId);
+  }
+
+  function endDrag() {
+    setDragGameId(null);
+    setDragOrigin(null);
+    setDragOver(null);
+  }
+
+  function onRowDragOver(target: DropTarget, e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const ids = idsForTarget(target);
+    setDragOver({ target, index: ids.length });
+  }
+
+  function onCardDragOver(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOver({ target, index });
+  }
+
+  function onRowDrop(target: DropTarget, fallbackIndex?: number) {
+    if (!dragGameId) return;
+    dropGame(dragGameId, target, resolveDropIndex(target, fallbackIndex));
+  }
 
   return (
     <div className={`app-shell ${screen === "editor" ? "editor-focus" : ""}`}>
@@ -504,8 +557,8 @@ function App() {
               <section
                 key={tier}
                 className={`tier-row tier-${tier}${dropFlashTarget === tier ? " tier-drop-flash" : ""}`}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => dragGameId && dropGame(dragGameId, tier)}
+                onDragOver={(e) => onRowDragOver(tier, e)}
+                onDrop={() => onRowDrop(tier)}
               >
                 <header>{tier}</header>
                 <div className="tier-cards">
@@ -513,31 +566,41 @@ function App() {
                     const game = gameMap.get(id);
                     if (!game) return null;
                     return (
-                      <article
-                        key={id}
-                        className="tier-game"
-                        draggable
-                        onDragStart={() => setDragGameId(id)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={() => dragGameId && dropGame(dragGameId, tier, idx)}
-                      >
-                        {game.coverArtUrl ? (
-                          <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
-                        ) : (
-                          <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                      <div key={id} className="tier-item-slot">
+                        {dragGameId && dragOver?.target === tier && dragOver.index === idx && dragGameId !== id && (
+                          <div className="tier-insert-slot" aria-hidden="true" />
                         )}
-                        <span>{game.title}</span>
-                      </article>
+                        <article
+                          className={`tier-game ${dragGameId === id && dragOrigin?.target === tier && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
+                          draggable
+                          onDragStart={(e) => startDrag(id, tier, idx, e)}
+                          onDragEnd={endDrag}
+                          onDragOver={(e) => onCardDragOver(tier, idx, e)}
+                          onDrop={() => onRowDrop(tier, idx)}
+                        >
+                          {dragGameId === id && dragOrigin?.target === tier && dragOrigin.index === idx ? (
+                            <div className="tier-origin-placeholder" />
+                          ) : game.coverArtUrl ? (
+                            <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
+                          ) : (
+                            <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                          )}
+                          <span>{game.title}</span>
+                        </article>
+                      </div>
                     );
                   })}
+                  {dragGameId && dragOver?.target === tier && dragOver.index === tierState.tiers[tier].length && (
+                    <div className="tier-insert-slot" aria-hidden="true" />
+                  )}
                 </div>
               </section>
             ))}
 
             <section
               className={`tier-row tier-pool${dropFlashTarget === "UNRANKED" ? " tier-drop-flash" : ""}`}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => dragGameId && dropGame(dragGameId, "UNRANKED")}
+              onDragOver={(e) => onRowDragOver("UNRANKED", e)}
+              onDrop={() => onRowDrop("UNRANKED")}
             >
               <header>Unranked</header>
               <div className="tier-cards">
@@ -545,23 +608,33 @@ function App() {
                   const game = gameMap.get(id);
                   if (!game) return null;
                   return (
-                    <article
-                      key={id}
-                      className="tier-game"
-                      draggable
-                      onDragStart={() => setDragGameId(id)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={() => dragGameId && dropGame(dragGameId, "UNRANKED", idx)}
-                    >
-                      {game.coverArtUrl ? (
-                        <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
-                      ) : (
-                        <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                    <div key={id} className="tier-item-slot">
+                      {dragGameId && dragOver?.target === "UNRANKED" && dragOver.index === idx && dragGameId !== id && (
+                        <div className="tier-insert-slot" aria-hidden="true" />
                       )}
-                      <span>{game.title}</span>
-                    </article>
+                      <article
+                        className={`tier-game ${dragGameId === id && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
+                        draggable
+                        onDragStart={(e) => startDrag(id, "UNRANKED", idx, e)}
+                        onDragEnd={endDrag}
+                        onDragOver={(e) => onCardDragOver("UNRANKED", idx, e)}
+                        onDrop={() => onRowDrop("UNRANKED", idx)}
+                      >
+                        {dragGameId === id && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? (
+                          <div className="tier-origin-placeholder" />
+                        ) : game.coverArtUrl ? (
+                          <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
+                        ) : (
+                          <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                        )}
+                        <span>{game.title}</span>
+                      </article>
+                    </div>
                   );
                 })}
+                {dragGameId && dragOver?.target === "UNRANKED" && dragOver.index === tierState.unranked.length && (
+                  <div className="tier-insert-slot" aria-hidden="true" />
+                )}
               </div>
             </section>
           </div>

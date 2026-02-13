@@ -274,10 +274,22 @@ body {
   padding: 8px;
   display: grid;
   gap: 8px;
+  position: relative;
+  overflow: hidden;
 }
 
 .tier-row.tier-drop-flash {
-  animation: tierDropFlash 380ms ease-out;
+  animation: tierDropFlash 420ms ease-out;
+}
+
+.tier-row.tier-drop-flash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.34) 50%, transparent 80%);
+  transform: translateX(-130%);
+  animation: tierDropSweep 520ms ease-out;
+  pointer-events: none;
 }
 
 .tier-row header {
@@ -314,15 +326,27 @@ body {
 }
 
 .tier-cards {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
   gap: 8px;
-  overflow-x: hidden;
+  align-items: start;
+}
+
+.tier-item-slot {
+  min-width: 0;
+}
+
+.tier-insert-slot {
+  width: 100%;
+  aspect-ratio: 264 / 374;
+  border-radius: 8px;
+  border: 2px dashed color-mix(in srgb, var(--line), #dbeafe 48%);
+  background: color-mix(in srgb, var(--panel-2), #94a3b8 28%);
 }
 
 .tier-game {
-  width: 120px;
-  min-height: 132px;
+  width: 100%;
+  min-height: 0;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -330,6 +354,18 @@ body {
   display: grid;
   gap: 6px;
   align-content: start;
+}
+
+.tier-game.is-origin-placeholder {
+  background: color-mix(in srgb, var(--panel), #9ca3af 40%);
+  border-style: dashed;
+}
+
+.tier-origin-placeholder {
+  width: 100%;
+  aspect-ratio: 264 / 374;
+  border-radius: 6px;
+  background: color-mix(in srgb, #6b7280, var(--panel) 45%);
 }
 
 .tier-game img {
@@ -354,14 +390,44 @@ body {
 
 @keyframes tierDropFlash {
   0% {
-    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.62);
-    transform: scale(0.995);
-    filter: saturate(1.35) brightness(1.08);
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.56);
+    filter: saturate(1.35) brightness(1.07);
   }
   100% {
-    box-shadow: 0 0 0 14px rgba(255, 255, 255, 0);
-    transform: scale(1);
+    box-shadow: 0 0 0 20px rgba(255, 255, 255, 0);
     filter: saturate(1) brightness(1);
+  }
+}
+
+@keyframes tierDropSweep {
+  0% {
+    transform: translateX(-130%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(130%);
+    opacity: 0;
+  }
+}
+
+@media (max-width: 1420px) {
+  .tier-cards {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1120px) {
+  .tier-cards {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .tier-cards {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
