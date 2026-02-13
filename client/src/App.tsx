@@ -193,6 +193,13 @@ function App() {
     setLinkedAccounts((prev) => prev.filter((a) => a.id !== accountId));
   }
 
+  function openAuthInNewTab(authUrl: string) {
+    const opened = window.open(authUrl, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      window.location.href = authUrl;
+    }
+  }
+
   async function syncSteamAccount(accountId: string) {
     setSyncingAccountId(accountId);
     const resp = await fetch(apiUrl(`/api/v1/accounts/steam/sync/${accountId}`), { method: "POST" });
@@ -411,12 +418,13 @@ function App() {
                 <p>{accountCounts[platform] ? `${accountCounts[platform]} connected` : "Not connected"}</p>
                 {platform === "Steam" ? (
                   <div className="platform-actions">
-                    <button onClick={() => (window.location.href = apiUrl("/api/v1/accounts/steam/start"))}>Connect</button>
+                    <button onClick={() => openAuthInNewTab(apiUrl("/api/v1/accounts/steam/start"))}>Connect</button>
                     <button onClick={() => setSteamManualOpen(true)}>Add Manually</button>
                   </div>
                 ) : (
                   <button disabled>Not Available</button>
                 )}
+                <p className="auth-note">Opens in a new tab for secure sign-in.</p>
               </article>
             ))}
           </div>
