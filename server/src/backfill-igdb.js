@@ -124,20 +124,20 @@ async function run() {
                               WHEN source_key IS NULL
                                 OR source_key = ''
                                 OR source_key LIKE 'thegamesdb:%'
-                              THEN $1
+                              THEN $1::text
                               ELSE source_key
                             END,
                platform = CASE
-                            WHEN (platform IS NULL OR platform IN ('Unknown', 'Manual')) AND $2 IS NOT NULL
-                            THEN $2
+                            WHEN (platform IS NULL OR platform IN ('Unknown', 'Manual')) AND $2::text IS NOT NULL
+                            THEN $2::text
                             ELSE platform
                           END,
                genre = CASE
-                         WHEN (genre IS NULL OR genre = 'Unknown') AND $3 IS NOT NULL
-                         THEN $3
+                         WHEN (genre IS NULL OR genre = 'Unknown') AND $3::text IS NOT NULL
+                         THEN $3::text
                          ELSE genre
                        END,
-               cover_art_url = COALESCE($4, cover_art_url),
+               cover_art_url = COALESCE($4::text, cover_art_url),
                metadata = $5::jsonb
            WHERE id = $6`,
           [`igdb:${best.id}`, platform, genre, coverArtUrl, JSON.stringify(metadata), row.id]
