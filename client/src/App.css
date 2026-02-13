@@ -545,6 +545,16 @@ button.danger {
 }
 
 @media (max-width: 760px) {
+  .app-shell {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .app-header,
+  .panel {
+    padding: 12px;
+  }
+
   .app-header {
     flex-direction: column;
     align-items: flex-start;
@@ -553,6 +563,22 @@ button.danger {
   .header-actions {
     width: 100%;
     flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .header-actions button {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 120px;
+  }
+
+  .app-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .app-nav button {
+    width: 100%;
   }
 
   .row-between {
@@ -568,11 +594,40 @@ button.danger {
     grid-column: 1 / -1;
   }
 
-  .tier-game {
-    width: calc(50% - 6px);
+  .platform-actions,
+  .account-actions {
+    flex-wrap: wrap;
+  }
+
+  .account-list li,
+  .search-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .search-item button {
+    width: 100%;
+  }
+
+  .tier-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .modal-search {
     flex-direction: column;
+  }
+}
+
+@media (max-width: 520px) {
+  .header-actions button {
+    flex-basis: 100%;
+  }
+
+  .app-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .tier-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
