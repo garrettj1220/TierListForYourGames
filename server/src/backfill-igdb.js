@@ -60,6 +60,20 @@ function mappedPlatform(platforms) {
   return "Multi-platform";
 }
 
+function sourceFallbackCover(row) {
+  const sourceKey = String(row?.source_key || "");
+  const metadata = row?.metadata || {};
+
+  const steamFromKey = sourceKey.startsWith("steam:") ? sourceKey.split(":")[1] : null;
+  const steamFromMeta = metadata?.steamAppId ? String(metadata.steamAppId) : null;
+  const steamAppId = steamFromKey || steamFromMeta;
+  if (steamAppId && /^\d+$/.test(steamAppId)) {
+    return `https://cdn.cloudflare.steamstatic.com/steam/apps/${steamAppId}/library_600x900_2x.jpg`;
+  }
+
+  return null;
+}
+
 async function run() {
   const databaseUrl = String(process.env.DATABASE_URL || "").trim();
   const twitchClientId = String(process.env.TWITCH_CLIENT_ID || "").trim();
@@ -95,13 +109,28 @@ async function run() {
     let matched = 0;
     let updated = 0;
     let skipped = 0;
+    let sourceFallbackApplied = 0;
 
     for (const row of rows) {
       scanned += 1;
       const games = await searchIgdbGame(twitchClientId, accessToken, row.title);
       const best = chooseBestMatch(row.title, games);
       if (!best) {
-        skipped += 1;
+        const fallbackCoverUrl = sourceFallbackCover(row);
+        if (!dryRun && fallbackCoverUrl) {
+          await client.query(
+            `UPDATE games_normalized
+             SET cover_art_url = COALESCE(cover_art_url, $1::text)
+             WHERE id = $2`,
+            [fallbackCoverUrl, row.id]
+          );
+        }
+        if (fallbackCoverUrl) {
+          sourceFallbackApplied += 1;
+          updated += 1;
+        } else {
+          skipped += 1;
+        }
         continue;
       }
       matched += 1;
@@ -154,7 +183,8 @@ async function run() {
           scanned,
           matched,
           updated,
-          skipped
+          skipped,
+          sourceFallbackApplied
         },
         null,
         2
