@@ -123,6 +123,18 @@ class JsonStorage {
     return { removed: before - db.linkedAccounts.length };
   }
 
+  async clearUserWorkspace(userId) {
+    const db = await readDb();
+    const accountsRemoved = db.linkedAccounts.filter((a) => a.userId === userId).length;
+    const gamesRemoved = db.userGames.filter((g) => g.userId === userId).length;
+    db.linkedAccounts = db.linkedAccounts.filter((a) => a.userId !== userId);
+    db.userGames = db.userGames.filter((g) => g.userId !== userId);
+    db.tierListState = { userId, tiers: DEFAULT_TIERS, unranked: [], updatedAt: null };
+    db.userThemeSettings = { userId, themeId: "dark" };
+    await writeDb(db);
+    return { accountsRemoved, gamesRemoved };
+  }
+
   async setTheme(userId, themeId) {
     const db = await readDb();
     db.userThemeSettings = { userId, themeId };
@@ -392,6 +404,38 @@ class PgStorage {
   async removeAccount(userId, accountId) {
     const result = await this.pool.query("DELETE FROM linked_accounts WHERE user_id = $1 AND id = $2", [userId, accountId]);
     return { removed: result.rowCount || 0 };
+  }
+
+  async clearUserWorkspace(userId) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const accounts = await client.query("DELETE FROM linked_accounts WHERE user_id = $1", [userId]);
+      const games = await client.query("DELETE FROM user_games WHERE user_id = $1", [userId]);
+      await client.query(
+        `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
+         VALUES ($1, $2::jsonb, $3::jsonb, NULL)
+         ON CONFLICT (user_id) DO UPDATE
+         SET tiers = EXCLUDED.tiers, unranked = EXCLUDED.unranked, updated_at = NULL`,
+        [userId, JSON.stringify(DEFAULT_TIERS), JSON.stringify([])]
+      );
+      await client.query(
+        `INSERT INTO user_theme_settings (user_id, theme_id)
+         VALUES ($1, 'dark')
+         ON CONFLICT (user_id) DO UPDATE SET theme_id = 'dark'`,
+        [userId]
+      );
+      await client.query("COMMIT");
+      return {
+        accountsRemoved: Number(accounts.rowCount || 0),
+        gamesRemoved: Number(games.rowCount || 0)
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async setTheme(userId, themeId) {

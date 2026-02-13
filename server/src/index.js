@@ -94,6 +94,11 @@ app.delete("/api/v1/accounts/:accountId", async (req, res) => {
   return res.json({ ok: true, ...result });
 });
 
+app.post("/api/v1/users/me/clear-all", async (_req, res) => {
+  const result = await storage.clearUserWorkspace(USER_ID);
+  return res.json({ ok: true, ...result });
+});
+
 app.get("/api/v1/accounts/steam/start", (req, res) => {
   const baseUrl = appUrl(req);
   const returnTo = `${baseUrl}/api/v1/accounts/steam/callback`;

@@ -298,6 +298,19 @@ function App() {
     }));
   }
 
+  async function clearAllWorkspace() {
+    const confirmed = window.confirm("Are you sure? This will remove all linked accounts and all games for your user.");
+    if (!confirmed) return;
+    const resp = await fetch(apiUrl("/api/v1/users/me/clear-all"), { method: "POST" });
+    if (!resp.ok) {
+      setStatus("Clear all failed.");
+      return;
+    }
+    await refreshAll();
+    setScreen("setup");
+    setStatus("Workspace reset. Start setup again.");
+  }
+
   function dropGame(gameId: string, target: TierKey | "UNRANKED", insertIndex?: number) {
     setTierState((prev) => {
       const next: TierListState = {
@@ -350,6 +363,7 @@ function App() {
             {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
           </button>
           <button onClick={() => void exportPdf()}>Export PDF</button>
+          <button className="danger" onClick={() => void clearAllWorkspace()}>Clear All</button>
         </div>
       </header>
 
