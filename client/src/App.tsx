@@ -148,7 +148,6 @@ function App() {
   }, [games]);
 
   const activeThemeSprites = useMemo(() => themeSpritesFor(themeId), [themeId]);
-  const activeThemeFlavor = useMemo(() => themeFlavorCopy(themeId), [themeId]);
 
   const tieredGameIds = useMemo(() => {
     return new Set([...tierState.unranked, ...TIER_KEYS.flatMap((tier) => tierState.tiers[tier])]);
@@ -499,16 +498,13 @@ function App() {
           </button>
         </nav>
 
-        {(activeThemeSprites.length > 0 || activeThemeFlavor) && (
+        {activeThemeSprites.length > 0 && (
           <section className="theme-personality">
-            {activeThemeFlavor && <p className="theme-flavor">{activeThemeFlavor}</p>}
-            {activeThemeSprites.length > 0 && (
-              <div className="sprite-strip" aria-label="Theme sprites">
-                {activeThemeSprites.slice(0, 8).map((src) => (
-                  <img key={src} src={src} alt="" />
-                ))}
-              </div>
-            )}
+            <div className="sprite-strip" aria-label="Theme sprites">
+              {activeThemeSprites.slice(0, 8).map((src) => (
+                <img key={src} src={src} alt="" />
+              ))}
+            </div>
           </section>
         )}
 
@@ -624,8 +620,16 @@ function App() {
 
             <section className="tier-wrap">
               {TIER_KEYS.map((tier) => (
-                <div key={tier} className="tier-row" onDragOver={(e) => e.preventDefault()} onDrop={() => onDropToTier(tier)}>
-                  <div className="tier-label">{displayLabel(tier)}</div>
+                <div
+                  key={tier}
+                  className={`tier-row tier-row-${tier}`}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => onDropToTier(tier)}
+                >
+                  <div className="tier-row-head">
+                    <h3>{displayLabel(tier)}</h3>
+                    <span>{tierState.tiers[tier].length} games</span>
+                  </div>
                   <div className="tier-cards">
                     {tierState.tiers[tier].map((id, idx) => {
                       const game = gameMap.get(id);
@@ -649,9 +653,11 @@ function App() {
               ))}
             </section>
 
-            <h3>Unranked Pool</h3>
-            <section className="tier-row" onDragOver={(e) => e.preventDefault()} onDrop={() => onDropToUnranked()}>
-              <div className="tier-label small">Pool</div>
+            <section className="tier-row tier-row-pool" onDragOver={(e) => e.preventDefault()} onDrop={() => onDropToUnranked()}>
+              <div className="tier-row-head">
+                <h3>Unranked Pool</h3>
+                <span>{tierState.unranked.length} games</span>
+              </div>
               <div className="tier-cards">
                 {tierState.unranked.map((id, idx) => {
                   const game = gameMap.get(id);
@@ -916,16 +922,6 @@ function themeSpritesFor(themeId: string) {
     ];
   }
   return [];
-}
-
-function themeFlavorCopy(themeId: string) {
-  if (themeId === "catstacker-arcade") {
-    return "CatStacker Arcade: playful stacks, soft bounce, and cozy arcade energy.";
-  }
-  if (themeId === "blonde-anime-glow") {
-    return "Blonde Anime Glow: polished character-forward style with soft light and clean contrast.";
-  }
-  return "";
 }
 
 export default App;

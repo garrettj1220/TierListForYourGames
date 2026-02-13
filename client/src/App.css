@@ -204,12 +204,6 @@
   padding: 12px 14px;
 }
 
-.theme-flavor {
-  margin: 0 0 8px;
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-
 .sprite-strip {
   display: flex;
   gap: 8px;
@@ -297,56 +291,69 @@
 
 .tier-row {
   display: grid;
-  grid-template-columns: minmax(80px, 106px) 1fr;
-  gap: 10px;
-  padding: 10px;
+  gap: 8px;
+  padding: 12px;
   border-radius: 14px;
-  background: var(--surfaceAlt);
+  border: 1px solid color-mix(in srgb, var(--accent), white 75%);
+  background: color-mix(in srgb, var(--surfaceAlt), white 22%);
 }
 
-.tier-label {
-  align-self: stretch;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  font-weight: 700;
-  color: #0f172a;
+.tier-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tier-row-head h3 {
+  margin: 0;
   font-family: "Sora", sans-serif;
+  font-size: 1rem;
 }
 
-.tier-row:nth-child(1) .tier-label {
-  background: var(--tier-s);
+.tier-row-head span {
+  font-size: 0.8rem;
+  color: color-mix(in srgb, var(--muted), black 10%);
+  background: color-mix(in srgb, #fff, transparent 25%);
+  border-radius: 999px;
+  padding: 4px 8px;
 }
 
-.tier-row:nth-child(2) .tier-label {
-  background: var(--tier-a);
+.tier-row-S {
+  background: linear-gradient(130deg, color-mix(in srgb, var(--tier-s), white 63%), color-mix(in srgb, #fff, transparent 10%));
 }
 
-.tier-row:nth-child(3) .tier-label {
-  background: var(--tier-b);
+.tier-row-A {
+  background: linear-gradient(130deg, color-mix(in srgb, var(--tier-a), white 66%), color-mix(in srgb, #fff, transparent 10%));
 }
 
-.tier-row:nth-child(4) .tier-label {
-  background: var(--tier-c);
+.tier-row-B {
+  background: linear-gradient(130deg, color-mix(in srgb, var(--tier-b), white 68%), color-mix(in srgb, #fff, transparent 10%));
 }
 
-.tier-row:nth-child(5) .tier-label {
-  background: var(--tier-d);
+.tier-row-C {
+  background: linear-gradient(130deg, color-mix(in srgb, var(--tier-c), white 68%), color-mix(in srgb, #fff, transparent 10%));
 }
 
-.tier-row:nth-child(6) .tier-label {
-  background: var(--tier-f);
+.tier-row-D {
+  background: linear-gradient(130deg, color-mix(in srgb, var(--tier-d), white 68%), color-mix(in srgb, #fff, transparent 10%));
 }
 
-.tier-label.small {
-  background: #dbeafe;
+.tier-row-F {
+  background: linear-gradient(130deg, color-mix(in srgb, var(--tier-f), white 72%), color-mix(in srgb, #fff, transparent 10%));
+}
+
+.tier-row-pool {
+  background: linear-gradient(130deg, #e2e8f0, #f8fafc);
 }
 
 .tier-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  min-height: 64px;
+  min-height: 76px;
+  align-content: flex-start;
+  overflow-x: hidden;
 }
 
 .game-card {
@@ -354,11 +361,14 @@
   background: #fff;
   border-radius: 12px;
   overflow: hidden;
-  display: flex;
+  display: inline-flex;
   flex-direction: column;
   gap: 6px;
   padding: 6px;
   cursor: grab;
+  width: 136px;
+  min-height: 144px;
+  flex: 0 0 auto;
 }
 
 .game-card img {
@@ -559,15 +569,17 @@ button.danger {
     margin-left: 0;
   }
 
-  .tier-row {
-    grid-template-columns: 1fr;
-  }
-
-  .tier-label {
-    min-height: 36px;
+  .tier-row-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .hero-stats {
     grid-template-columns: 1fr;
+  }
+
+  .game-card {
+    width: calc(50% - 6px);
+    min-width: 132px;
   }
 }
