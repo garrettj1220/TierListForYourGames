@@ -15,12 +15,20 @@ const __dirname = path.dirname(__filename);
 const artDir = path.join(__dirname, "../../Art");
 const storage = createStorage();
 
+app.set("trust proxy", true);
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
 app.use("/art", express.static(artDir));
 
-function appUrl() {
-  return process.env.APP_BASE_URL || `http://localhost:${PORT}`;
+function appUrl(req) {
+  if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL;
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const proto =
+    typeof forwardedProto === "string"
+      ? forwardedProto.split(",")[0].trim()
+      : req.protocol || "http";
+  const host = req.headers["x-forwarded-host"] || req.get("host");
+  return host ? `${proto}://${host}` : `http://localhost:${PORT}`;
 }
 
 function frontendUrl() {
@@ -60,9 +68,10 @@ app.delete("/api/v1/accounts/:accountId", async (req, res) => {
   return res.json({ ok: true, ...result });
 });
 
-app.get("/api/v1/accounts/steam/start", (_req, res) => {
-  const returnTo = `${appUrl()}/api/v1/accounts/steam/callback`;
-  const realm = appUrl();
+app.get("/api/v1/accounts/steam/start", (req, res) => {
+  const baseUrl = appUrl(req);
+  const returnTo = `${baseUrl}/api/v1/accounts/steam/callback`;
+  const realm = baseUrl;
   const params = new URLSearchParams({
     "openid.ns": "http://specs.openid.net/auth/2.0",
     "openid.mode": "checkid_setup",
