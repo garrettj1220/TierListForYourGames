@@ -43,7 +43,10 @@ type SearchResult = {
   metadata?: Record<string, unknown>;
 };
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
+  .trim()
+  .split(/\s+/)[0]
+  .replace(/\/$/, "");
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
