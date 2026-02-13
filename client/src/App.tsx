@@ -13,7 +13,7 @@ type Game = {
   genre: string;
   popularity: number;
   playtimeMinutes: number;
-  coverArtUrl: string;
+  coverArtUrl: string | null;
   manuallyAdded: boolean;
 };
 
@@ -55,8 +55,8 @@ function apiUrl(path: string) {
   return `${API_BASE}${path}`;
 }
 
-function assetUrl(path: string) {
-  if (!path) return path;
+function assetUrl(path?: string | null): string | null {
+  if (!path) return null;
   if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) return path;
   if (path.startsWith("/")) return API_BASE ? `${API_BASE}${path}` : path;
   return path;
@@ -73,9 +73,9 @@ function App() {
   const [status, setStatus] = useState("");
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
-
-  const [newAccountPlatform, setNewAccountPlatform] = useState("Steam");
-  const [newAccountName, setNewAccountName] = useState("");
+  const [steamManualOpen, setSteamManualOpen] = useState(false);
+  const [manualSteamId, setManualSteamId] = useState("");
+  const [manualSteamSaving, setManualSteamSaving] = useState(false);
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -111,6 +111,8 @@ function App() {
     const steam = params.get("steam");
     if (!steam) return;
     if (steam === "linked") setStatus("Steam account connected.");
+    if (steam === "linked_no_key") setStatus("Steam connected. Add STEAM_WEB_API_KEY to sync games.");
+    if (steam === "linked_sync_failed") setStatus("Steam connected. Game sync failed.");
     if (steam === "failed") setStatus("Steam sign-in failed.");
     window.history.replaceState({}, "", window.location.pathname);
     void refreshAll();
@@ -121,7 +123,7 @@ function App() {
       const bootstrapResp = await fetch(apiUrl("/api/v1/bootstrap"));
       const bootstrap = await bootstrapResp.json();
       const nextAccounts = (bootstrap?.linkedAccounts ?? []) as LinkedAccount[];
-      const nextGames = ((bootstrap?.games ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) }));
+      const nextGames = ((bootstrap?.games ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null }));
       const nextTheme = bootstrap?.theme?.themeId === "light" ? "light" : "dark";
 
       setLinkedAccounts(nextAccounts);
@@ -158,18 +160,31 @@ function App() {
     });
   }
 
-  async function addManualAccount(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newAccountName.trim()) return;
-    const resp = await fetch(apiUrl("/api/v1/accounts/link"), {
+  async function addSteamManual() {
+    if (!manualSteamId.trim()) return;
+    setManualSteamSaving(true);
+    const resp = await fetch(apiUrl("/api/v1/accounts/steam/manual"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platform: newAccountPlatform, accountName: newAccountName.trim() })
+      body: JSON.stringify({ steamId: manualSteamId.trim() })
     });
-    if (!resp.ok) return;
-    const json = await resp.json();
-    setLinkedAccounts((prev) => [json.linked, ...prev]);
-    setNewAccountName("");
+    const json = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      setStatus(json?.error || "Could not add Steam account.");
+      setManualSteamSaving(false);
+      return;
+    }
+    await refreshAll();
+    if (json?.status === "linked_no_key") {
+      setStatus("Steam linked. Add STEAM_WEB_API_KEY to sync games.");
+    } else if (json?.status === "sync_failed") {
+      setStatus("Steam linked, but sync failed. Ensure games list is public.");
+    } else {
+      setStatus("Steam account linked.");
+    }
+    setManualSteamId("");
+    setSteamManualOpen(false);
+    setManualSteamSaving(false);
   }
 
   async function removeAccount(accountId: string) {
@@ -215,7 +230,9 @@ function App() {
       body: JSON.stringify({ query: searchQuery.trim() })
     });
     const json = await resp.json().catch(() => ({ results: [] }));
-    setSearchResults((json.results ?? []).map((g: SearchResult) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl || "") })));
+    const results = (json.results ?? []).map((g: SearchResult) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl || "") }));
+    setSearchResults(results);
+    if (results.length === 0) setStatus("No local matches. Try Expand Search.");
     setSearching(false);
   }
 
@@ -229,7 +246,9 @@ function App() {
       body: JSON.stringify({ query: searchQuery.trim() })
     });
     const json = await resp.json().catch(() => ({ results: [] }));
-    setSearchResults((json.results ?? []).map((g: SearchResult) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl || "") })));
+    const results = (json.results ?? []).map((g: SearchResult) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl || "") }));
+    setSearchResults(results);
+    if (results.length === 0) setStatus("No external matches found.");
     setSearching(false);
   }
 
@@ -320,7 +339,7 @@ function App() {
   if (loading) return <div className="app-shell loading">Loading...</div>;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${screen === "editor" ? "editor-focus" : ""}`}>
       <header className="app-header">
         <div>
           <h1>Tier List Your Games</h1>
@@ -377,28 +396,16 @@ function App() {
                 <h3>{platform}</h3>
                 <p>{accountCounts[platform] ? `${accountCounts[platform]} connected` : "Not connected"}</p>
                 {platform === "Steam" ? (
-                  <button onClick={() => (window.location.href = apiUrl("/api/v1/accounts/steam/start"))}>Connect</button>
+                  <div className="platform-actions">
+                    <button onClick={() => (window.location.href = apiUrl("/api/v1/accounts/steam/start"))}>Connect</button>
+                    <button onClick={() => setSteamManualOpen(true)}>Add Manually</button>
+                  </div>
                 ) : (
-                  <button
-                    onClick={() => {
-                      setNewAccountPlatform(platform);
-                      setNewAccountName("");
-                    }}
-                  >
-                    Add Account
-                  </button>
+                  <button disabled>Not Available</button>
                 )}
               </article>
             ))}
           </div>
-
-          <form className="inline-form" onSubmit={addManualAccount}>
-            <select value={newAccountPlatform} onChange={(e) => setNewAccountPlatform(e.target.value)}>
-              {ACCOUNT_PLATFORMS.map((p) => <option key={p}>{p}</option>)}
-            </select>
-            <input value={newAccountName} onChange={(e) => setNewAccountName(e.target.value)} placeholder="Account name" />
-            <button type="submit">Add</button>
-          </form>
 
           <h3>Connected Accounts</h3>
           {linkedAccounts.length === 0 ? (
@@ -438,7 +445,11 @@ function App() {
             <div className="game-list">
               {games.map((g) => (
                 <article key={g.id} className="game-item">
-                  <img src={assetUrl(g.coverArtUrl)} alt={g.title} />
+                  {g.coverArtUrl ? (
+                    <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
+                  ) : (
+                    <div className="cover-fallback cover-fallback-list">{g.title}</div>
+                  )}
                   <div>
                     <strong>{g.title}</strong>
                     <span>{g.platform}</span>
@@ -479,7 +490,11 @@ function App() {
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={() => dragGameId && dropGame(dragGameId, tier, idx)}
                       >
-                        <img src={assetUrl(game.coverArtUrl)} alt={game.title} />
+                        {game.coverArtUrl ? (
+                          <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
+                        ) : (
+                          <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                        )}
                         <span>{game.title}</span>
                       </article>
                     );
@@ -507,7 +522,11 @@ function App() {
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={() => dragGameId && dropGame(dragGameId, "UNRANKED", idx)}
                     >
-                      <img src={assetUrl(game.coverArtUrl)} alt={game.title} />
+                      {game.coverArtUrl ? (
+                        <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
+                      ) : (
+                        <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                      )}
                       <span>{game.title}</span>
                     </article>
                   );
@@ -543,6 +562,25 @@ function App() {
                   <button onClick={() => void addGame(r)}>Add</button>
                 </article>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {steamManualOpen && (
+        <div className="modal-backdrop" onClick={() => setSteamManualOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Add Steam Account Manually</h3>
+            <p className="modal-note">Enter your SteamID64. Make sure your account games list is public.</p>
+            <div className="modal-search">
+              <input
+                value={manualSteamId}
+                onChange={(e) => setManualSteamId(e.target.value)}
+                placeholder="SteamID64"
+              />
+              <button onClick={() => void addSteamManual()} disabled={manualSteamSaving}>
+                {manualSteamSaving ? "Adding..." : "Add"}
+              </button>
             </div>
           </div>
         </div>

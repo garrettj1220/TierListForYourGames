@@ -20,6 +20,19 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
 app.use("/art", express.static(artDir));
 
+function hasEnv(name) {
+  return Boolean(String(process.env[name] || "").trim());
+}
+
+function ensureRequiredEnvForProduction() {
+  if (process.env.NODE_ENV !== "production") return;
+  const missing = [];
+  if (!hasEnv("STEAM_WEB_API_KEY")) missing.push("STEAM_WEB_API_KEY");
+  if (missing.length > 0) {
+    throw new Error(`Missing required production env vars: ${missing.join(", ")}`);
+  }
+}
+
 function appUrl(req) {
   if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL;
   const forwardedProto = req.headers["x-forwarded-proto"];
@@ -36,7 +49,15 @@ function frontendUrl() {
 }
 
 app.get("/api/v1/health", (_req, res) => {
-  res.json({ ok: true, timestamp: nowIso(), database: process.env.DATABASE_URL ? "postgres" : "json" });
+  res.json({
+    ok: true,
+    timestamp: nowIso(),
+    database: process.env.DATABASE_URL ? "postgres" : "json",
+    env: {
+      steamKeyPresent: hasEnv("STEAM_WEB_API_KEY"),
+      gamesDbKeyPresent: hasEnv("THEGAMESDB_API_KEY")
+    }
+  });
 });
 
 app.get("/api/v1/themes", (_req, res) => {
@@ -54,11 +75,11 @@ app.get("/api/v1/accounts", async (_req, res) => {
 });
 
 app.post("/api/v1/accounts/link", async (req, res) => {
-  const { platform, accountName } = req.body ?? {};
+  const { platform, accountName, externalUserId = null, metadata = {} } = req.body ?? {};
   if (!platform || !accountName) {
     return res.status(400).json({ error: "platform and accountName are required" });
   }
-  const linked = await storage.linkAccount(USER_ID, { platform, accountName });
+  const linked = await storage.linkAccount(USER_ID, { platform, accountName, externalUserId, metadata });
   return res.status(linked.alreadyLinked ? 200 : 201).json({ linked });
 });
 
@@ -114,32 +135,25 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
       return res.redirect(`${frontendUrl()}/?steam=failed`);
     }
 
+    const personaName = await fetchSteamPersonaName(steamId).catch(() => null);
     const linked = await storage.linkAccount(USER_ID, {
       platform: "Steam",
-      accountName: `Steam ${steamId.slice(-4)}`,
+      accountName: personaName || `Steam ${steamId.slice(-4)}`,
       externalUserId: steamId,
-      metadata: { steamId }
+      metadata: { steamId, personaName: personaName || null }
     });
 
     if (process.env.STEAM_WEB_API_KEY) {
       try {
-        const steamParams = new URLSearchParams({
-          key: process.env.STEAM_WEB_API_KEY,
-          steamid: steamId,
-          include_appinfo: "1",
-          include_played_free_games: "1",
-          format: "json"
-        });
-        const steamResp = await fetch(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?${steamParams.toString()}`);
-        const steamJson = await steamResp.json();
-        const games = steamJson?.response?.games ?? [];
+        const games = await fetchSteamOwnedGames(steamId);
         await storage.ingestSteamLibrary(USER_ID, linked.id, games);
+        return res.redirect(`${frontendUrl()}/?steam=linked`);
       } catch {
-        // Callback should still complete even if background sync fails.
+        return res.redirect(`${frontendUrl()}/?steam=linked_sync_failed`);
       }
     }
 
-    return res.redirect(`${frontendUrl()}/?steam=linked`);
+    return res.redirect(`${frontendUrl()}/?steam=linked_no_key`);
   } catch {
     return res.redirect(`${frontendUrl()}/?steam=failed`);
   }
@@ -162,6 +176,19 @@ async function fetchSteamOwnedGames(steamId) {
   return json?.response?.games ?? [];
 }
 
+async function fetchSteamPersonaName(steamId) {
+  const steamApiKey = process.env.STEAM_WEB_API_KEY;
+  if (!steamApiKey) return null;
+  const params = new URLSearchParams({
+    key: steamApiKey,
+    steamids: steamId,
+    format: "json"
+  });
+  const response = await fetch(`https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?${params.toString()}`);
+  const json = await response.json();
+  return json?.response?.players?.[0]?.personaname ?? null;
+}
+
 app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
   const account = await storage.getAccount(USER_ID, req.params.accountId);
   const steamId = account?.external_user_id ?? account?.externalUserId;
@@ -175,6 +202,38 @@ app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
     return res.json({ ok: true, source: "steam", count: games.length, ...summary });
   } catch (error) {
     return res.status(500).json({ error: "Steam sync failed", details: String(error) });
+  }
+});
+
+app.post("/api/v1/accounts/steam/manual", async (req, res) => {
+  const steamId = String(req.body?.steamId || "").trim();
+  if (!steamId || !/^\d{5,20}$/.test(steamId)) {
+    return res.status(400).json({ error: "A valid Steam ID is required" });
+  }
+
+  const personaName = await fetchSteamPersonaName(steamId).catch(() => null);
+  const linked = await storage.linkAccount(USER_ID, {
+    platform: "Steam",
+    accountName: personaName || `Steam ${steamId.slice(-4)}`,
+    externalUserId: steamId,
+    metadata: { steamId, personaName: personaName || null }
+  });
+
+  if (!process.env.STEAM_WEB_API_KEY) {
+    return res.status(201).json({ ok: true, status: "linked_no_key", linked });
+  }
+
+  try {
+    const games = await fetchSteamOwnedGames(steamId);
+    const summary = await storage.ingestSteamLibrary(USER_ID, linked.id, games);
+    return res.status(201).json({ ok: true, status: "linked", linked, ...summary });
+  } catch (error) {
+    return res.status(502).json({
+      ok: false,
+      status: "sync_failed",
+      error: "Steam sync failed. Make sure your profile games list is public.",
+      details: String(error)
+    });
   }
 });
 
@@ -270,45 +329,31 @@ app.put("/api/v1/tier-list/state", async (req, res) => {
 async function externalSearch(query) {
   const normalized = String(query).trim();
   const apiKey = process.env.THEGAMESDB_API_KEY;
-  if (!apiKey) {
-    const base = [
-      { title: "The Legend of Zelda: Tears of the Kingdom", platform: "Nintendo", genre: "Adventure", popularity: 95 },
-      { title: "Baldur's Gate 3", platform: "Steam", genre: "RPG", popularity: 97 },
-      { title: "Helldivers 2", platform: "PlayStation", genre: "Shooter", popularity: 90 },
-      { title: "Hades", platform: "Steam", genre: "Roguelike", popularity: 93 },
-      { title: "Fortnite", platform: "Epic Games", genre: "Battle Royale", popularity: 99 }
-    ];
-    return base
-      .filter((g) => g.title.toLowerCase().includes(normalized.toLowerCase()))
-      .slice(0, 10)
-      .map((g, idx) => ({
-        ...g,
-        source: "mock",
-        externalId: `mock-${idx}-${g.title}`,
-        sourceKey: `mock:${g.platform}:${g.title.toLowerCase()}`,
-        coverArtUrl: `https://placehold.co/240x320/f8fafc/111827?text=${encodeURIComponent(g.title.slice(0, 18))}`,
-        metadata: {}
-      }));
-  }
+  if (!apiKey) return [];
 
-  const params = new URLSearchParams({
-    apikey: apiKey,
-    name: normalized
-  });
-  const resp = await fetch(`https://api.thegamesdb.net/v1/Games/ByGameName?${params.toString()}`);
-  const json = await resp.json();
-  const games = json?.data?.games ?? [];
-  return games.slice(0, 20).map((g) => ({
-    title: g.game_title,
-    platform: g.platform || "Unknown",
-    genre: "Unknown",
-    popularity: 50,
-    coverArtUrl: null,
-    source: "thegamesdb",
-    externalId: g.id,
-    sourceKey: `thegamesdb:${g.id}`,
-    metadata: { theGamesDbId: g.id }
-  }));
+  try {
+    const params = new URLSearchParams({
+      apikey: apiKey,
+      name: normalized
+    });
+    const resp = await fetch(`https://api.thegamesdb.net/v1/Games/ByGameName?${params.toString()}`);
+    const json = await resp.json();
+    const games = json?.data?.games ?? [];
+    const mapped = games.slice(0, 20).map((g) => ({
+      title: g.game_title,
+      platform: g.platform || "Unknown",
+      genre: "Unknown",
+      popularity: 50,
+      coverArtUrl: null,
+      source: "thegamesdb",
+      externalId: g.id,
+      sourceKey: `thegamesdb:${g.id}`,
+      metadata: { theGamesDbId: g.id }
+    }));
+    return mapped;
+  } catch {
+    return [];
+  }
 }
 
 app.post("/api/v1/metadata/search/local", async (req, res) => {
@@ -351,5 +396,6 @@ app.post("/api/v1/metadata/search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
+  ensureRequiredEnvForProduction();
   console.log(`Tier List Your Games API listening on http://localhost:${PORT}`);
 });

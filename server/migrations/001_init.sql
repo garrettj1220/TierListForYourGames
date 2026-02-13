@@ -58,6 +58,16 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   ended_at TIMESTAMPTZ
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS linked_accounts_user_platform_external_uidx
+  ON linked_accounts (user_id, LOWER(platform), external_user_id)
+  WHERE external_user_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS linked_accounts_user_platform_name_uidx
+  ON linked_accounts (user_id, LOWER(platform), LOWER(account_name));
+
+CREATE INDEX IF NOT EXISTS games_normalized_title_norm_idx
+  ON games_normalized ((regexp_replace(LOWER(title), '[^a-z0-9]+', '', 'g')));
+
 INSERT INTO users (id, name)
 VALUES ('demo-user', 'Demo User')
 ON CONFLICT (id) DO NOTHING;
