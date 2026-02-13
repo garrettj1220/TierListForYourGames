@@ -243,7 +243,7 @@ class JsonStorage {
           platform: "Steam",
           genre: "Unknown",
           popularity: 70,
-          coverArtUrl: null,
+          coverArtUrl: `https://cdn.cloudflare.steamstatic.com/steam/apps/${raw.appid}/library_600x900_2x.jpg`,
           metadata: { steamAppId: raw.appid }
         };
         db.gamesNormalized.push(catalogGame);
@@ -251,6 +251,7 @@ class JsonStorage {
       } else {
         catalogGame.title = title;
         catalogGame.platform = mergedPlatform(catalogGame.platform, "Steam");
+        catalogGame.coverArtUrl = catalogGame.coverArtUrl || `https://cdn.cloudflare.steamstatic.com/steam/apps/${raw.appid}/library_600x900_2x.jpg`;
         catalogGame.metadata = { ...(catalogGame.metadata || {}), steamAppId: raw.appid };
         updated += 1;
       }
@@ -586,7 +587,7 @@ class PgStorage {
       for (const raw of ownedGames) {
         const sourceKey = `steam:${raw.appid}`;
         const title = raw.name || `Steam App ${raw.appid}`;
-        const coverArtUrl = null;
+        const coverArtUrl = `https://cdn.cloudflare.steamstatic.com/steam/apps/${raw.appid}/library_600x900_2x.jpg`;
         const existingGame = await client.query("SELECT id FROM games_normalized WHERE source_key = $1 LIMIT 1", [sourceKey]);
         let gameId;
         if (existingGame.rows[0]) {

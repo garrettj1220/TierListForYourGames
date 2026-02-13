@@ -14,6 +14,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const artDir = path.join(__dirname, "../../Art");
 const storage = createStorage();
+let igdbTokenCache = {
+  accessToken: null,
+  expiresAtMs: 0
+};
 
 app.set("trust proxy", true);
 app.use(cors({ origin: true, credentials: true }));
@@ -55,7 +59,8 @@ app.get("/api/v1/health", (_req, res) => {
     database: process.env.DATABASE_URL ? "postgres" : "json",
     env: {
       steamKeyPresent: hasEnv("STEAM_WEB_API_KEY"),
-      gamesDbKeyPresent: hasEnv("THEGAMESDB_API_KEY")
+      igdbClientIdPresent: hasEnv("TWITCH_CLIENT_ID"),
+      igdbClientSecretPresent: hasEnv("TWITCH_CLIENT_SECRET")
     }
   });
 });
@@ -329,32 +334,76 @@ app.put("/api/v1/tier-list/state", async (req, res) => {
 
 async function externalSearch(query) {
   const normalized = String(query).trim();
-  const apiKey = process.env.THEGAMESDB_API_KEY;
-  if (!apiKey) return [];
+  const clientId = String(process.env.TWITCH_CLIENT_ID || "").trim();
+  const clientSecret = String(process.env.TWITCH_CLIENT_SECRET || "").trim();
+  if (!clientId || !clientSecret) return [];
 
   try {
-    const params = new URLSearchParams({
-      apikey: apiKey,
-      name: normalized
+    const appToken = await getIgdbAccessToken(clientId, clientSecret);
+    const body = `fields name,cover.image_id,platforms.name,genres.name; search "${normalized.replace(/"/g, '\\"')}"; limit 20;`;
+    const resp = await fetch("https://api.igdb.com/v4/games", {
+      method: "POST",
+      headers: {
+        "Client-ID": clientId,
+        Authorization: `Bearer ${appToken}`,
+        "Content-Type": "text/plain"
+      },
+      body
     });
-    const resp = await fetch(`https://api.thegamesdb.net/v1/Games/ByGameName?${params.toString()}`);
-    const json = await resp.json();
-    const games = json?.data?.games ?? [];
-    const mapped = games.slice(0, 20).map((g) => ({
-      title: g.game_title,
-      platform: g.platform || "Unknown",
-      genre: "Unknown",
-      popularity: 50,
-      coverArtUrl: null,
-      source: "thegamesdb",
-      externalId: g.id,
-      sourceKey: `thegamesdb:${g.id}`,
-      metadata: { theGamesDbId: g.id }
-    }));
-    return mapped;
+    if (!resp.ok) return [];
+    const games = await resp.json();
+    if (!Array.isArray(games)) return [];
+    return games.slice(0, 20).map((g) => {
+      const coverImageId = g?.cover?.image_id || null;
+      const platforms = Array.isArray(g?.platforms) ? g.platforms.map((p) => p?.name).filter(Boolean) : [];
+      const genres = Array.isArray(g?.genres) ? g.genres.map((genre) => genre?.name).filter(Boolean) : [];
+      return {
+        title: g?.name || "Unknown",
+        platform: platforms.length <= 1 ? (platforms[0] || "Unknown") : "Multi-platform",
+        genre: genres[0] || "Unknown",
+        popularity: 50,
+        coverArtUrl: coverImageId ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${coverImageId}.jpg` : null,
+        source: "igdb",
+        externalId: g?.id,
+        sourceKey: `igdb:${g?.id}`,
+        metadata: { igdbId: g?.id, coverImageId, platforms }
+      };
+    });
   } catch {
     return [];
   }
+}
+
+async function getIgdbAccessToken(clientId, clientSecret) {
+  const now = Date.now();
+  if (igdbTokenCache.accessToken && igdbTokenCache.expiresAtMs > now + 60000) {
+    return igdbTokenCache.accessToken;
+  }
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    grant_type: "client_credentials"
+  });
+  const resp = await fetch("https://id.twitch.tv/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString()
+  });
+  if (!resp.ok) {
+    throw new Error(`Twitch token request failed: ${resp.status}`);
+  }
+  const json = await resp.json();
+  const accessToken = json?.access_token;
+  const expiresIn = Number(json?.expires_in || 0);
+  if (!accessToken || !expiresIn) {
+    throw new Error("Invalid Twitch token response");
+  }
+  igdbTokenCache = {
+    accessToken,
+    expiresAtMs: now + expiresIn * 1000
+  };
+  return accessToken;
 }
 
 app.post("/api/v1/metadata/search/local", async (req, res) => {

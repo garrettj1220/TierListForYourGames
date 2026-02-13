@@ -227,7 +227,8 @@ body {
 
 .game-item img {
   width: 52px;
-  height: 72px;
+  aspect-ratio: 264 / 374;
+  height: auto;
   border-radius: 7px;
   object-fit: cover;
 }
@@ -247,7 +248,7 @@ body {
 
 .cover-fallback-list {
   width: 52px;
-  height: 72px;
+  aspect-ratio: 264 / 374;
   font-size: 0.58rem;
 }
 
@@ -323,14 +324,15 @@ body {
 
 .tier-game img {
   width: 100%;
-  height: 86px;
+  aspect-ratio: 264 / 374;
+  height: auto;
   border-radius: 6px;
   object-fit: cover;
 }
 
 .cover-fallback-tier {
   width: 100%;
-  height: 86px;
+  aspect-ratio: 264 / 374;
   border-radius: 6px;
   font-size: 0.62rem;
 }
