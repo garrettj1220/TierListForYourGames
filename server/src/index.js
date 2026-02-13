@@ -450,7 +450,7 @@ app.post("/api/v1/metadata/search", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   ensureRequiredEnvForProduction();
-  console.log(`Tier List Your Games API listening on http://localhost:${PORT}`);
+  console.log(`Tier List Your Games API listening on http://0.0.0.0:${PORT}`);
 });
