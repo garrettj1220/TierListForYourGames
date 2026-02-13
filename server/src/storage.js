@@ -7,6 +7,27 @@ function makeSourceKey(title, platform = "Manual") {
   return `manual:${String(title).trim().toLowerCase()}:${String(platform).trim().toLowerCase()}`;
 }
 
+function normalizedTitle(title) {
+  return String(title || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function mergedPlatform(current, incoming) {
+  if (!current) return incoming || "Unknown";
+  if (!incoming || current === incoming) return current;
+  return "Multi-platform";
+}
+
+function accountKey(platform, accountName, externalUserId) {
+  return {
+    platform: String(platform || "").trim().toLowerCase(),
+    accountName: String(accountName || "").trim().toLowerCase(),
+    externalUserId: externalUserId ? String(externalUserId).trim() : null
+  };
+}
+
 function normalizeGameRecord(record) {
   return {
     id: record.id,
@@ -47,6 +68,19 @@ class JsonStorage {
 
   async linkAccount(userId, { platform, accountName, externalUserId = null, metadata = {} }) {
     const db = await readDb();
+    const key = accountKey(platform, accountName, externalUserId);
+    const existing = db.linkedAccounts.find((a) => {
+      if (a.userId !== userId) return false;
+      const candidate = accountKey(a.platform, a.accountName, a.externalUserId);
+      if (key.externalUserId && candidate.externalUserId) {
+        return key.platform === candidate.platform && key.externalUserId === candidate.externalUserId;
+      }
+      return key.platform === candidate.platform && key.accountName === candidate.accountName;
+    });
+    if (existing) {
+      return { ...existing, alreadyLinked: true };
+    }
+
     const linked = {
       id: createId("acct"),
       userId,
@@ -59,7 +93,7 @@ class JsonStorage {
     };
     db.linkedAccounts.push(linked);
     await writeDb(db);
-    return linked;
+    return { ...linked, alreadyLinked: false };
   }
 
   async getAccount(userId, accountId) {
@@ -114,6 +148,10 @@ class JsonStorage {
 
     let catalogGame = db.gamesNormalized.find((g) => g.sourceKey === sourceKey);
     if (!catalogGame) {
+      const tKey = normalizedTitle(gameInput.title);
+      catalogGame = db.gamesNormalized.find((g) => normalizedTitle(g.title) === tKey);
+    }
+    if (!catalogGame) {
       catalogGame = {
         id: createId("game"),
         sourceKey,
@@ -125,6 +163,10 @@ class JsonStorage {
         metadata: gameInput.metadata || {}
       };
       db.gamesNormalized.push(catalogGame);
+    } else {
+      catalogGame.platform = mergedPlatform(catalogGame.platform, gameInput.platform || "Manual");
+      catalogGame.coverArtUrl = catalogGame.coverArtUrl || coverArtUrl;
+      catalogGame.metadata = { ...(catalogGame.metadata || {}), ...(gameInput.metadata || {}) };
     }
 
     const existingUserGame = db.userGames.find((g) => g.userId === userId && g.id === catalogGame.id);
@@ -179,6 +221,9 @@ class JsonStorage {
       const sourceKey = `steam:${raw.appid}`;
       let catalogGame = db.gamesNormalized.find((g) => g.sourceKey === sourceKey);
       if (!catalogGame) {
+        catalogGame = db.gamesNormalized.find((g) => normalizedTitle(g.title) === normalizedTitle(title));
+      }
+      if (!catalogGame) {
         catalogGame = {
           id: createId("game"),
           sourceKey,
@@ -193,7 +238,9 @@ class JsonStorage {
         inserted += 1;
       } else {
         catalogGame.title = title;
+        catalogGame.platform = mergedPlatform(catalogGame.platform, "Steam");
         catalogGame.coverArtUrl = `https://cdn.cloudflare.steamstatic.com/steam/apps/${raw.appid}/library_600x900_2x.jpg`;
+        catalogGame.metadata = { ...(catalogGame.metadata || {}), steamAppId: raw.appid };
         updated += 1;
       }
 
@@ -276,13 +323,37 @@ class PgStorage {
   }
 
   async linkAccount(userId, { platform, accountName, externalUserId = null, metadata = {} }) {
+    if (externalUserId) {
+      const existingByExternal = await this.pool.query(
+        `SELECT id, platform, account_name AS "accountName", external_user_id AS "externalUserId", sync_status AS "syncStatus"
+         FROM linked_accounts
+         WHERE user_id = $1 AND platform = $2 AND external_user_id = $3
+         LIMIT 1`,
+        [userId, platform, externalUserId]
+      );
+      if (existingByExternal.rows[0]) {
+        return { ...existingByExternal.rows[0], userId, alreadyLinked: true };
+      }
+    } else {
+      const existingByName = await this.pool.query(
+        `SELECT id, platform, account_name AS "accountName", external_user_id AS "externalUserId", sync_status AS "syncStatus"
+         FROM linked_accounts
+         WHERE user_id = $1 AND platform = $2 AND LOWER(account_name) = LOWER($3)
+         LIMIT 1`,
+        [userId, platform, accountName]
+      );
+      if (existingByName.rows[0]) {
+        return { ...existingByName.rows[0], userId, alreadyLinked: true };
+      }
+    }
+
     const id = createId("acct");
     await this.pool.query(
       `INSERT INTO linked_accounts (id, user_id, platform, account_name, external_user_id, metadata, linked_at, sync_status)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW(), 'connected')`,
       [id, userId, platform, accountName, externalUserId, JSON.stringify(metadata)]
     );
-    return { id, userId, platform, accountName, externalUserId, syncStatus: "connected" };
+    return { id, userId, platform, accountName, externalUserId, syncStatus: "connected", alreadyLinked: false };
   }
 
   async getAccount(userId, accountId) {
@@ -340,8 +411,40 @@ class PgStorage {
       const coverArtUrl =
         gameInput.coverArtUrl ||
         `https://placehold.co/240x320/eef2ff/0f172a?text=${encodeURIComponent(gameInput.title.slice(0, 18))}`;
-      const gameId = createId("game");
-      const persisted = await client.query(
+      const titleMatch = await client.query(
+        `SELECT id, title, platform, genre, popularity, cover_art_url
+         FROM games_normalized
+         WHERE LOWER(title) = LOWER($1)
+         LIMIT 1`,
+        [gameInput.title]
+      );
+
+      let persistedGame;
+      if (titleMatch.rows[0]) {
+        const matched = titleMatch.rows[0];
+        const merged = mergedPlatform(matched.platform, gameInput.platform || "Manual");
+        const updated = await client.query(
+          `UPDATE games_normalized
+           SET platform = $1,
+               genre = COALESCE(NULLIF($2, ''), genre),
+               popularity = GREATEST(popularity, $3),
+               cover_art_url = COALESCE(cover_art_url, $4),
+               metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb
+           WHERE id = $6
+           RETURNING id, title, platform, genre, popularity, cover_art_url`,
+          [
+            merged,
+            gameInput.genre || "Unknown",
+            Number(gameInput.popularity) || 50,
+            coverArtUrl,
+            JSON.stringify(gameInput.metadata || {}),
+            matched.id
+          ]
+        );
+        persistedGame = updated.rows[0];
+      } else {
+        const gameId = createId("game");
+        const persisted = await client.query(
         `INSERT INTO games_normalized (id, source_key, title, platform, genre, popularity, cover_art_url, metadata)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
          ON CONFLICT (source_key) DO UPDATE
@@ -362,8 +465,9 @@ class PgStorage {
           coverArtUrl,
           JSON.stringify(gameInput.metadata || {})
         ]
-      );
-      const persistedGame = persisted.rows[0];
+        );
+        persistedGame = persisted.rows[0];
+      }
       const persistedGameId = persistedGame.id;
       await client.query(
         `INSERT INTO user_games (user_id, game_id, playtime_minutes, manually_added)
@@ -473,13 +577,27 @@ class PgStorage {
           );
           updated += 1;
         } else {
-          gameId = createId("game");
-          await client.query(
+          const byTitle = await client.query("SELECT id, platform FROM games_normalized WHERE LOWER(title) = LOWER($1) LIMIT 1", [title]);
+          if (byTitle.rows[0]) {
+            gameId = byTitle.rows[0].id;
+            await client.query(
+              `UPDATE games_normalized
+               SET platform = $1,
+                   cover_art_url = COALESCE(cover_art_url, $2),
+                   metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+               WHERE id = $4`,
+              [mergedPlatform(byTitle.rows[0].platform, "Steam"), coverArtUrl, JSON.stringify({ steamAppId: raw.appid }), gameId]
+            );
+            updated += 1;
+          } else {
+            gameId = createId("game");
+            await client.query(
             `INSERT INTO games_normalized (id, source_key, title, platform, genre, popularity, cover_art_url, metadata)
              VALUES ($1, $2, $3, 'Steam', 'Unknown', 70, $4, $5::jsonb)`,
             [gameId, sourceKey, title, coverArtUrl, JSON.stringify({ steamAppId: raw.appid })]
-          );
-          inserted += 1;
+            );
+            inserted += 1;
+          }
         }
 
         await client.query(

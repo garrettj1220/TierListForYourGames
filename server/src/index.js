@@ -59,7 +59,7 @@ app.post("/api/v1/accounts/link", async (req, res) => {
     return res.status(400).json({ error: "platform and accountName are required" });
   }
   const linked = await storage.linkAccount(USER_ID, { platform, accountName });
-  return res.status(201).json({ linked });
+  return res.status(linked.alreadyLinked ? 200 : 201).json({ linked });
 });
 
 app.delete("/api/v1/accounts/:accountId", async (req, res) => {
