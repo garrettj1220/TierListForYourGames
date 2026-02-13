@@ -4,6 +4,7 @@ import "./App.css";
 type Screen = "setup" | "accounts" | "games" | "editor";
 type TierKey = "S" | "A" | "B" | "C" | "D" | "F";
 type ThemeMode = "dark" | "light";
+type DropTarget = TierKey | "UNRANKED";
 
 type Game = {
   id: string;
@@ -70,6 +71,7 @@ function App() {
   const [games, setGames] = useState<Game[]>([]);
   const [tierState, setTierState] = useState<TierListState>(DEFAULT_TIER_STATE);
   const [dragGameId, setDragGameId] = useState<string | null>(null);
+  const [dropFlashTarget, setDropFlashTarget] = useState<DropTarget | null>(null);
   const [status, setStatus] = useState("");
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
@@ -105,6 +107,12 @@ function App() {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    if (!dropFlashTarget) return;
+    const timeout = window.setTimeout(() => setDropFlashTarget(null), 380);
+    return () => window.clearTimeout(timeout);
+  }, [dropFlashTarget]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -318,7 +326,8 @@ function App() {
     setStatus("Workspace reset. Start setup again.");
   }
 
-  function dropGame(gameId: string, target: TierKey | "UNRANKED", insertIndex?: number) {
+  function dropGame(gameId: string, target: DropTarget, insertIndex?: number) {
+    setDropFlashTarget(target);
     setTierState((prev) => {
       const next: TierListState = {
         ...prev,
@@ -494,7 +503,7 @@ function App() {
             {TIER_KEYS.map((tier) => (
               <section
                 key={tier}
-                className={`tier-row tier-${tier}`}
+                className={`tier-row tier-${tier}${dropFlashTarget === tier ? " tier-drop-flash" : ""}`}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => dragGameId && dropGame(dragGameId, tier)}
               >
@@ -526,7 +535,7 @@ function App() {
             ))}
 
             <section
-              className="tier-row tier-pool"
+              className={`tier-row tier-pool${dropFlashTarget === "UNRANKED" ? " tier-drop-flash" : ""}`}
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => dragGameId && dropGame(dragGameId, "UNRANKED")}
             >

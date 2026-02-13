@@ -276,6 +276,10 @@ body {
   gap: 8px;
 }
 
+.tier-row.tier-drop-flash {
+  animation: tierDropFlash 380ms ease-out;
+}
+
 .tier-row header {
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -346,6 +350,19 @@ body {
 .tier-game span {
   font-size: 0.78rem;
   line-height: 1.2;
+}
+
+@keyframes tierDropFlash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.62);
+    transform: scale(0.995);
+    filter: saturate(1.35) brightness(1.08);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(255, 255, 255, 0);
+    transform: scale(1);
+    filter: saturate(1) brightness(1);
+  }
 }
 
 .modal-backdrop {
