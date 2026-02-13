@@ -378,6 +378,9 @@ body {
   align-content: start;
   cursor: grab;
   user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
+  -webkit-touch-callout: none;
 }
 
 .tier-game.is-origin-placeholder {
@@ -394,6 +397,34 @@ body {
 
 .tier-game:active {
   cursor: grabbing;
+}
+
+.touch-drag-ghost {
+  position: fixed;
+  z-index: 1200;
+  pointer-events: none;
+  opacity: 0.95;
+  transform: scale(1.02);
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--line), #dbeafe 36%);
+  border-radius: 8px;
+  padding: 6px;
+  display: grid;
+  gap: 6px;
+  box-shadow: 0 16px 30px rgba(2, 6, 23, 0.45);
+}
+
+.touch-drag-ghost img {
+  width: 100%;
+  aspect-ratio: 264 / 374;
+  height: auto;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.touch-drag-ghost span {
+  font-size: 0.78rem;
+  line-height: 1.2;
 }
 
 .tier-game img {
