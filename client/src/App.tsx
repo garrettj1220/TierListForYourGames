@@ -560,7 +560,9 @@ function App() {
                 onDragOver={(e) => onRowDragOver(tier, e)}
                 onDrop={() => onRowDrop(tier)}
               >
-                <header>{tier}</header>
+                <header>
+                  <span className="tier-label">{tier}</span>
+                </header>
                 <div className="tier-cards">
                   {tierState.tiers[tier].map((id, idx) => {
                     const game = gameMap.get(id);
@@ -602,7 +604,9 @@ function App() {
               onDragOver={(e) => onRowDragOver("UNRANKED", e)}
               onDrop={() => onRowDrop("UNRANKED")}
             >
-              <header>Unranked</header>
+              <header>
+                <span className="tier-label">Unranked</span>
+              </header>
               <div className="tier-cards">
                 {tierState.unranked.map((id, idx) => {
                   const game = gameMap.get(id);

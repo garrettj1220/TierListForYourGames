@@ -293,8 +293,33 @@ body {
 }
 
 .tier-row header {
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+}
+
+.tier-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  padding: 3px 10px 4px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #ffffff, var(--line) 68%);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08));
+  box-shadow:
+    0 2px 10px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f8fbff;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
+
+.tier-pool .tier-label {
+  color: #dbeafe;
+  border-color: color-mix(in srgb, #93c5fd, var(--line) 72%);
+  background: linear-gradient(145deg, rgba(30, 41, 59, 0.72), rgba(15, 23, 42, 0.44));
 }
 
 .tier-S {
