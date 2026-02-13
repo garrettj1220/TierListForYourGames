@@ -385,6 +385,14 @@ function App() {
 
   function resolveDropIndex(target: DropTarget, fallbackIndex?: number) {
     const ids = idsForTarget(target);
+    if (
+      target === "UNRANKED" &&
+      dragOrigin?.target === "UNRANKED" &&
+      typeof fallbackIndex !== "number" &&
+      (!dragOver || (dragOver.target === "UNRANKED" && dragOver.index >= ids.length))
+    ) {
+      return Math.min(dragOrigin.index, Math.max(ids.length - 1, 0));
+    }
     if (dragOver?.target === target) return dragOver.index;
     if (typeof fallbackIndex === "number") return fallbackIndex;
     return ids.length;
@@ -592,7 +600,7 @@ function App() {
                 <header>
                   <span className="tier-label">{tier}</span>
                 </header>
-                <div className="tier-cards">
+                <div className={`tier-cards ${tierState.tiers[tier].length === 0 ? "is-empty" : ""}`}>
                   {tierState.tiers[tier].map((id, idx) => {
                     const game = gameMap.get(id);
                     if (!game) return null;
@@ -636,7 +644,7 @@ function App() {
               <header>
                 <span className="tier-label">Unranked</span>
               </header>
-              <div className="tier-cards">
+              <div className={`tier-cards ${tierState.unranked.length === 0 ? "is-empty" : ""}`}>
                 {tierState.unranked.map((id, idx) => {
                   const game = gameMap.get(id);
                   if (!game) return null;

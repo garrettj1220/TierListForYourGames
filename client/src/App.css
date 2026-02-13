@@ -350,6 +350,10 @@ body {
   min-height: 150px;
 }
 
+.tier-cards.is-empty {
+  min-height: 0;
+}
+
 .tier-item-slot {
   min-width: 0;
 }
