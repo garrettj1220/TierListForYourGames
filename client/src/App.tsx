@@ -39,6 +39,19 @@ const PLATFORM_OPTIONS = [
   { name: "Itch.io", status: "coming-soon" }
 ];
 
+const FALLBACK_THEMES: Theme[] = [
+  { id: "apple-glass-white-default", name: "Apple Glass White", tags: ["light", "glass"] },
+  { id: "classic-clean", name: "Classic Clean", tags: ["clean", "neutral"] },
+  { id: "minimal-light", name: "Minimal Light", tags: ["light", "minimal"] },
+  { id: "minimal-dark", name: "Minimal Dark", tags: ["dark", "minimal"] },
+  { id: "catstacker-arcade", name: "CatStacker Arcade", tags: ["playful", "arcade"] },
+  { id: "blonde-anime-glow", name: "Blonde Anime Glow", tags: ["anime", "stylized"] },
+  { id: "retro-pixel", name: "Retro Pixel", tags: ["retro", "pixel"] },
+  { id: "forest-calm", name: "Forest Calm", tags: ["nature", "calm"] },
+  { id: "synth-sunset", name: "Synth Sunset", tags: ["vibrant", "retro"] },
+  { id: "zen-garden", name: "Zen Garden", tags: ["minimal", "calm"] }
+];
+
 const DEFAULT_TIER_STATE: TierListState = {
   tiers: { S: [], A: [], B: [], C: [], D: [], F: [] },
   unranked: [],
@@ -70,6 +83,31 @@ function assetUrl(pathname: string) {
 
 function normalizeGame(game: Game): Game {
   return { ...game, coverArtUrl: assetUrl(game.coverArtUrl) };
+}
+
+function normalizeThemes(rawThemes: unknown, currentThemeId: string): Theme[] {
+  const input = Array.isArray(rawThemes) ? rawThemes : [];
+  const parsed = input
+    .map((t) => {
+      const candidate = t as Partial<Theme>;
+      if (!candidate?.id || !candidate?.name) return null;
+      return {
+        id: String(candidate.id),
+        name: String(candidate.name),
+        tags: Array.isArray(candidate.tags) ? candidate.tags.map(String) : []
+      } satisfies Theme;
+    })
+    .filter((t): t is Theme => Boolean(t));
+
+  const base = parsed.length > 0 ? parsed : FALLBACK_THEMES;
+  const withDefault = base.some((t) => t.id === "apple-glass-white-default")
+    ? base
+    : [{ id: "apple-glass-white-default", name: "Apple Glass White", tags: ["light", "default"] }, ...base];
+
+  if (!withDefault.some((t) => t.id === currentThemeId)) {
+    return [{ id: currentThemeId, name: `Current (${currentThemeId})`, tags: ["current"] }, ...withDefault];
+  }
+  return withDefault;
 }
 
 function App() {
@@ -139,12 +177,15 @@ function App() {
       const [bootstrapResp, themesResp] = await Promise.all([fetch(apiUrl("/api/v1/bootstrap")), fetch(apiUrl("/api/v1/themes"))]);
       const bootstrap = await bootstrapResp.json();
       const themesData = await themesResp.json();
+      const nextThemeId = bootstrap?.theme?.themeId ?? "apple-glass-white-default";
 
-      setThemes(themesData.themes ?? []);
-      setThemeId(bootstrap?.theme?.themeId ?? "apple-glass-white-default");
+      setThemes(normalizeThemes(themesData?.themes, nextThemeId));
+      setThemeId(nextThemeId);
       setLinkedAccounts(bootstrap?.linkedAccounts ?? []);
       setGames((bootstrap?.games ?? []).map(normalizeGame));
       setTierState(bootstrap?.tierListState ?? DEFAULT_TIER_STATE);
+    } catch {
+      setThemes(normalizeThemes([], "apple-glass-white-default"));
     } finally {
       setLoading(false);
     }
@@ -395,304 +436,367 @@ function App() {
     );
   }, [games, searchTerm, genreFilter, platformFilter, popularityFilter, sortMode]);
 
-  if (loading) return <div className="page"><p>Loading app state...</p></div>;
+  const availableThemes = useMemo(() => normalizeThemes(themes, themeId), [themes, themeId]);
+  const rankedCount = tieredGameIds.size - tierState.unranked.length;
+  const completion = games.length === 0 ? 0 : Math.round((rankedCount / games.length) * 100);
+
+  if (loading) {
+    return (
+      <div className="page">
+        <div className="shell">
+          <section className="loading-card">
+            <h2>Loading your workspace</h2>
+            <p>Pulling accounts, games, and theme settings...</p>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
-      {(activeThemeSprites.length > 0 || activeThemeFlavor) && (
-        <section className="theme-personality">
-          {activeThemeFlavor && <p className="theme-flavor">{activeThemeFlavor}</p>}
-          {activeThemeSprites.length > 0 && (
-            <div className="sprite-strip" aria-label="Theme sprites">
-              {activeThemeSprites.slice(0, 8).map((src) => (
-                <img key={src} src={src} alt="" />
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-      <header className="topbar">
-        <div>
-          <h1>Tier List Your Games</h1>
-          <p>Build your list across every linked platform.</p>
-          <p className="muted-note">Created by GarrettJPG</p>
-        </div>
-        <div className="topbar-actions">
-          {screen !== "menu" && (
-            <button className="ghost" onClick={() => setScreen("menu")}>
-              Back to Menu
+      <div className="shell">
+        <header className="app-hero">
+          <div className="hero-left">
+            <p className="eyebrow">Created by GarrettJPG</p>
+            <h1>Tier List Your Games</h1>
+            <p className="hero-subtitle">A cleaner command center for collecting, ranking, and exporting your game backlog.</p>
+          </div>
+          <div className="hero-stats">
+            <article>
+              <span>Games</span>
+              <strong>{games.length}</strong>
+            </article>
+            <article>
+              <span>Linked Accounts</span>
+              <strong>{linkedAccounts.length}</strong>
+            </article>
+            <article>
+              <span>Ranked Progress</span>
+              <strong>{completion}%</strong>
+            </article>
+          </div>
+        </header>
+
+        <nav className="screen-nav" aria-label="Primary navigation">
+          {[
+            ["menu", "Dashboard"],
+            ["accounts", "Accounts"],
+            ["games", "Games"],
+            ["editor", "Tier Editor"],
+            ["themes", "Themes"]
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              className={`nav-pill ${screen === key ? "active" : ""}`}
+              onClick={() => setScreen(key as Screen)}
+            >
+              {label}
             </button>
-          )}
-        </div>
-      </header>
+          ))}
+          <button className="nav-pill ghost" onClick={() => void exportPdf()}>
+            Export PDF
+          </button>
+        </nav>
 
-      {screen === "menu" && (
-        <main className="menu-grid">
-          <button className="menu-card primary" onClick={() => setScreen(hasTierData() ? "editor" : "accounts")}>
-            <strong>{hasTierData() ? "Edit your tier list" : "Start your tier list"}</strong>
-            <span>{hasTierData() ? "Continue ranking your games." : "Link accounts first, then rank your games."}</span>
-          </button>
-          <button className="menu-card" onClick={() => setScreen("accounts")}>
-            <strong>Add accounts to your tier list</strong>
-            <span>Connect supported platforms and sync your library.</span>
-          </button>
-          <button className="menu-card" onClick={() => setScreen("games")}>
-            <strong>Games list</strong>
-            <span>Search, filter, add, and bulk remove games.</span>
-          </button>
-          <button className="menu-card" onClick={() => setScreen("themes")}>
-            <strong>Themes</strong>
-            <span>Open the full theme list, preview, and apply instantly.</span>
-          </button>
-          <button className="menu-card" onClick={() => void exportPdf()}>
-            <strong>Create PDF</strong>
-            <span>Download your current tier list layout.</span>
-          </button>
-        </main>
-      )}
-
-      {screen === "accounts" && (
-        <main className="panel">
-          <h2>Account Linking</h2>
-          <p>Link-only integrations. Manual input happens only in Games list.</p>
-          <div className="row wrap">
-            <button onClick={() => (window.location.href = apiUrl("/api/v1/accounts/steam/start"))}>Connect Steam (OAuth)</button>
-            {steamStatus && <span>{steamStatus}</span>}
-          </div>
-          <form className="inline-form" onSubmit={linkAccount}>
-            <select value={accountPlatform} onChange={(e) => setAccountPlatform(e.target.value)}>
-              {PLATFORM_OPTIONS.filter((p) => p.status !== "coming-soon").map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <input
-              value={accountName}
-              onChange={(e) => setAccountName(e.target.value)}
-              placeholder="Account name"
-              aria-label="Account name"
-            />
-            <button type="submit">Link Account</button>
-          </form>
-
-          <div className="platform-grid">
-            {PLATFORM_OPTIONS.map((p) => (
-              <div className="platform-card" key={p.name}>
-                <strong>{p.name}</strong>
-                <span className={`status status-${p.status}`}>{statusLabel(p.status)}</span>
+        {(activeThemeSprites.length > 0 || activeThemeFlavor) && (
+          <section className="theme-personality">
+            {activeThemeFlavor && <p className="theme-flavor">{activeThemeFlavor}</p>}
+            {activeThemeSprites.length > 0 && (
+              <div className="sprite-strip" aria-label="Theme sprites">
+                {activeThemeSprites.slice(0, 8).map((src) => (
+                  <img key={src} src={src} alt="" />
+                ))}
               </div>
-            ))}
-          </div>
-
-          <h3>Linked accounts</h3>
-          {linkedAccounts.length === 0 ? (
-            <p>No linked accounts yet.</p>
-          ) : (
-            <ul className="simple-list">
-              {linkedAccounts.map((a) => (
-                <li key={a.id}>
-                  <strong>{a.platform}</strong> - {a.accountName}
-                  {a.platform === "Steam" && (
-                    <button onClick={() => void syncSteamAccount(a.id)} disabled={syncingAccountId === a.id}>
-                      {syncingAccountId === a.id ? "Syncing..." : "Sync Steam library"}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <button onClick={() => setScreen("editor")}>Continue to Tier Editor</button>
-        </main>
-      )}
-
-      {screen === "editor" && (
-        <main className="panel">
-          <div className="row between">
-            <h2>Tier Editor</h2>
-            <div className="row">
-              <button onClick={saveTierList}>Save</button>
-              <span>{saveStatus}</span>
-            </div>
-          </div>
-          {tierState.updatedAt && (
-            <p className="muted-note">Last saved: {new Date(tierState.updatedAt).toLocaleString()}</p>
-          )}
-
-          {games.length === 0 && (
-            <p>
-              No games yet. Add games in Games list or link an account first.
-            </p>
-          )}
-
-          <section className="tier-wrap">
-            {TIER_KEYS.map((tier) => (
-              <div key={tier} className="tier-row" onDragOver={(e) => e.preventDefault()} onDrop={() => onDropToTier(tier)}>
-                <div className="tier-label">{displayLabel(tier)}</div>
-                <div className="tier-cards">
-                  {tierState.tiers[tier].map((id, idx) => {
-                    const game = gameMap.get(id);
-                    if (!game) return null;
-                    return (
-                      <article
-                        key={id}
-                        className="game-card"
-                        draggable
-                        onDragStart={() => setDragGameId(id)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={() => onDropToTier(tier, idx)}
-                      >
-                        <img src={game.coverArtUrl} alt={game.title} />
-                        <span>{game.title}</span>
-                      </article>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+            )}
           </section>
+        )}
 
-          <h3>Unranked</h3>
-          <section className="tier-row" onDragOver={(e) => e.preventDefault()} onDrop={() => onDropToUnranked()}>
-            <div className="tier-label small">Pool</div>
-            <div className="tier-cards">
-              {tierState.unranked.map((id, idx) => {
-                const game = gameMap.get(id);
-                if (!game) return null;
-                return (
-                  <article
-                    key={id}
-                    className="game-card"
-                    draggable
-                    onDragStart={() => setDragGameId(id)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => onDropToUnranked(idx)}
-                  >
-                    <img src={game.coverArtUrl} alt={game.title} />
-                    <span>{game.title}</span>
-                  </article>
-                );
-              })}
+        {screen === "menu" && (
+          <main className="workspace">
+            <section className="menu-grid">
+              <button className="menu-card primary" onClick={() => setScreen(hasTierData() ? "editor" : "accounts")}>
+                <small>Workflow</small>
+                <strong>{hasTierData() ? "Continue tier editing" : "Get started in under 2 minutes"}</strong>
+                <span>{hasTierData() ? "Jump straight back into ranking and save when ready." : "Link one account, sync games, and start ranking."}</span>
+              </button>
+              <button className="menu-card" onClick={() => setScreen("accounts")}>
+                <small>Connections</small>
+                <strong>Manage linked platforms</strong>
+                <span>Connect Steam now, keep Xbox/PlayStation pilot slots visible for future sync.</span>
+              </button>
+              <button className="menu-card" onClick={() => setScreen("games")}>
+                <small>Library</small>
+                <strong>Curate your games list</strong>
+                <span>Search, filter, bulk remove, and add games from metadata lookup.</span>
+              </button>
+              <button className="menu-card" onClick={() => setScreen("themes")}>
+                <small>Appearance</small>
+                <strong>Apply visual themes</strong>
+                <span>Pick a theme preset and change the whole app style instantly.</span>
+              </button>
+              <button className="menu-card" onClick={() => void exportPdf()}>
+                <small>Share</small>
+                <strong>Generate ranking PDF</strong>
+                <span>Create a clean export of current tier rows and unranked pool.</span>
+              </button>
+            </section>
+          </main>
+        )}
+
+        {screen === "accounts" && (
+          <main className="workspace panel">
+            <div className="panel-head">
+              <h2>Account Linking</h2>
+              <p>Connect platforms first, then sync libraries into your ranking workspace.</p>
             </div>
-          </section>
-        </main>
-      )}
-
-      {screen === "games" && (
-        <main className="panel">
-          <div className="row between">
-            <h2>Games List</h2>
-            <button className="danger" onClick={removeSelectedGames}>
-              Remove Selected ({selectedGameIds.length})
-            </button>
-          </div>
-          <div className="filters">
-            <input placeholder="Search title..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-            <select value={sortMode} onChange={(e) => setSortMode(e.target.value as "A-Z" | "Z-A")}>
-              <option>A-Z</option>
-              <option>Z-A</option>
-            </select>
-            <select value={genreFilter} onChange={(e) => setGenreFilter(e.target.value)}>
-              {genres.map((g) => (
-                <option key={g}>{g}</option>
-              ))}
-            </select>
-            <select value={platformFilter} onChange={(e) => setPlatformFilter(e.target.value)}>
-              {platforms.map((p) => (
-                <option key={p}>{p}</option>
-              ))}
-            </select>
-            <select value={popularityFilter} onChange={(e) => setPopularityFilter(e.target.value)}>
-              <option>All</option>
-              <option>Popular</option>
-              <option>Mid</option>
-              <option>Niche</option>
-            </select>
-          </div>
-
-          <div className="manual-add">
-            <h3>Manually Add Games</h3>
-            <div className="inline-form">
+            <div className="row wrap">
+              <button onClick={() => (window.location.href = apiUrl("/api/v1/accounts/steam/start"))}>Connect Steam (OAuth)</button>
+              {steamStatus && <span className="status-inline">{steamStatus}</span>}
+            </div>
+            <form className="inline-form" onSubmit={linkAccount}>
+              <select value={accountPlatform} onChange={(e) => setAccountPlatform(e.target.value)}>
+                {PLATFORM_OPTIONS.filter((p) => p.status !== "coming-soon").map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
               <input
-                value={manualQuery}
-                onChange={(e) => setManualQuery(e.target.value)}
-                placeholder="Search game title..."
+                value={accountName}
+                onChange={(e) => setAccountName(e.target.value)}
+                placeholder="Account name"
+                aria-label="Account name"
               />
-              <button onClick={searchMetadata} disabled={searching}>
-                {searching ? "Searching..." : "Search"}
+              <button type="submit">Link Account</button>
+            </form>
+
+            <div className="platform-grid">
+              {PLATFORM_OPTIONS.map((p) => (
+                <div className="platform-card" key={p.name}>
+                  <strong>{p.name}</strong>
+                  <span className={`status status-${p.status}`}>{statusLabel(p.status)}</span>
+                </div>
+              ))}
+            </div>
+
+            <h3>Linked Accounts</h3>
+            {linkedAccounts.length === 0 ? (
+              <p className="muted-note">No linked accounts yet.</p>
+            ) : (
+              <ul className="simple-list">
+                {linkedAccounts.map((a) => (
+                  <li key={a.id}>
+                    <strong>{a.platform}</strong> - {a.accountName}
+                    {a.platform === "Steam" && (
+                      <button onClick={() => void syncSteamAccount(a.id)} disabled={syncingAccountId === a.id}>
+                        {syncingAccountId === a.id ? "Syncing..." : "Sync Steam library"}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </main>
+        )}
+
+        {screen === "editor" && (
+          <main className="workspace panel">
+            <div className="row between">
+              <div className="panel-head compact">
+                <h2>Tier Editor</h2>
+                <p>Drag games between tiers and keep your ranking state saved.</p>
+              </div>
+              <div className="row">
+                <button onClick={saveTierList}>Save</button>
+                <span className="status-inline">{saveStatus}</span>
+              </div>
+            </div>
+            {tierState.updatedAt && (
+              <p className="muted-note">Last saved: {new Date(tierState.updatedAt).toLocaleString()}</p>
+            )}
+
+            {games.length === 0 && (
+              <p className="muted-note">
+                No games yet. Add games in Games list or sync from a linked account first.
+              </p>
+            )}
+
+            <section className="tier-wrap">
+              {TIER_KEYS.map((tier) => (
+                <div key={tier} className="tier-row" onDragOver={(e) => e.preventDefault()} onDrop={() => onDropToTier(tier)}>
+                  <div className="tier-label">{displayLabel(tier)}</div>
+                  <div className="tier-cards">
+                    {tierState.tiers[tier].map((id, idx) => {
+                      const game = gameMap.get(id);
+                      if (!game) return null;
+                      return (
+                        <article
+                          key={id}
+                          className="game-card"
+                          draggable
+                          onDragStart={() => setDragGameId(id)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => onDropToTier(tier, idx)}
+                        >
+                          <img src={assetUrl(game.coverArtUrl)} alt={game.title} />
+                          <span>{game.title}</span>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </section>
+
+            <h3>Unranked Pool</h3>
+            <section className="tier-row" onDragOver={(e) => e.preventDefault()} onDrop={() => onDropToUnranked()}>
+              <div className="tier-label small">Pool</div>
+              <div className="tier-cards">
+                {tierState.unranked.map((id, idx) => {
+                  const game = gameMap.get(id);
+                  if (!game) return null;
+                  return (
+                    <article
+                      key={id}
+                      className="game-card"
+                      draggable
+                      onDragStart={() => setDragGameId(id)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={() => onDropToUnranked(idx)}
+                    >
+                      <img src={assetUrl(game.coverArtUrl)} alt={game.title} />
+                      <span>{game.title}</span>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          </main>
+        )}
+
+        {screen === "games" && (
+          <main className="workspace panel">
+            <div className="row between">
+              <div className="panel-head compact">
+                <h2>Games List</h2>
+                <p>Filter your library and maintain a clean ranking-ready dataset.</p>
+              </div>
+              <button className="danger" onClick={removeSelectedGames}>
+                Remove Selected ({selectedGameIds.length})
               </button>
             </div>
-            <div className="search-results">
-              {searchResults.map((r) => (
-                <div className="search-result" key={`${r.title}-${r.platform}`}>
+            <div className="filters">
+              <input placeholder="Search title..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+              <select value={sortMode} onChange={(e) => setSortMode(e.target.value as "A-Z" | "Z-A")}>
+                <option>A-Z</option>
+                <option>Z-A</option>
+              </select>
+              <select value={genreFilter} onChange={(e) => setGenreFilter(e.target.value)}>
+                {genres.map((g) => (
+                  <option key={g}>{g}</option>
+                ))}
+              </select>
+              <select value={platformFilter} onChange={(e) => setPlatformFilter(e.target.value)}>
+                {platforms.map((p) => (
+                  <option key={p}>{p}</option>
+                ))}
+              </select>
+              <select value={popularityFilter} onChange={(e) => setPopularityFilter(e.target.value)}>
+                <option>All</option>
+                <option>Popular</option>
+                <option>Mid</option>
+                <option>Niche</option>
+              </select>
+            </div>
+
+            <div className="manual-add">
+              <h3>Metadata Search</h3>
+              <div className="inline-form">
+                <input
+                  value={manualQuery}
+                  onChange={(e) => setManualQuery(e.target.value)}
+                  placeholder="Search game title..."
+                />
+                <button onClick={searchMetadata} disabled={searching}>
+                  {searching ? "Searching..." : "Search"}
+                </button>
+              </div>
+              <div className="search-results">
+                {searchResults.map((r) => (
+                  <div className="search-result" key={`${r.title}-${r.platform}`}>
+                    <div>
+                      <strong>{r.title}</strong>
+                      <span>
+                        {r.platform} - {r.genre}
+                      </span>
+                    </div>
+                    <button onClick={() => addGameFromSearch(r)}>Add</button>
+                  </div>
+                ))}
+                {!searching && manualQuery.trim().length >= 2 && searchResults.length === 0 && (
+                  <p className="muted-note">No results found. Try a broader title.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="games-table">
+              {filteredGames.map((g) => (
+                <label key={g.id} className="game-row">
+                  <input
+                    type="checkbox"
+                    checked={selectedGameIds.includes(g.id)}
+                    onChange={(e) =>
+                      setSelectedGameIds((prev) =>
+                        e.target.checked ? [...prev, g.id] : prev.filter((id) => id !== g.id)
+                      )
+                    }
+                  />
+                  <img src={assetUrl(g.coverArtUrl)} alt={g.title} />
                   <div>
-                    <strong>{r.title}</strong>
+                    <strong>{g.title}</strong>
                     <span>
-                      {r.platform} - {r.genre}
+                      {g.platform} | {g.genre} | popularity {g.popularity}
                     </span>
                   </div>
-                  <button onClick={() => addGameFromSearch(r)}>Add</button>
-                </div>
+                </label>
               ))}
-              {!searching && manualQuery.trim().length >= 2 && searchResults.length === 0 && (
-                <p className="muted-note">No results found. Try a broader title.</p>
-              )}
+              {filteredGames.length === 0 && <p className="muted-note">No games match your current filters.</p>}
             </div>
-          </div>
+          </main>
+        )}
 
-          <div className="games-table">
-            {filteredGames.map((g) => (
-              <label key={g.id} className="game-row">
-                <input
-                  type="checkbox"
-                  checked={selectedGameIds.includes(g.id)}
-                  onChange={(e) =>
-                    setSelectedGameIds((prev) =>
-                      e.target.checked ? [...prev, g.id] : prev.filter((id) => id !== g.id)
-                    )
-                  }
-                />
-                <img src={g.coverArtUrl} alt={g.title} />
-                <div>
-                  <strong>{g.title}</strong>
-                  <span>
-                    {g.platform} | {g.genre} | popularity {g.popularity}
-                  </span>
-                </div>
-              </label>
-            ))}
-            {filteredGames.length === 0 && <p className="muted-note">No games match your current filters.</p>}
-          </div>
-        </main>
-      )}
-
-      {screen === "themes" && (
-        <main className="panel">
-          <h2>Themes</h2>
-          <p>Pick a theme to apply app-wide instantly.</p>
-          <div className="theme-grid">
-            {themes.map((theme) => (
+        {screen === "themes" && (
+          <main className="workspace panel">
+            <div className="row between">
+              <div className="panel-head compact">
+                <h2>Themes</h2>
+                <p>Choose a visual style. Theme options now include built-in fallbacks if API data is empty.</p>
+              </div>
               <button
-                key={theme.id}
-                className={`theme-card ${themeId === theme.id ? "selected" : ""}`}
-                onClick={() => applyTheme(theme)}
+                onClick={() => {
+                  const defaultTheme = availableThemes.find((t) => t.id === "apple-glass-white-default");
+                  if (defaultTheme) void applyTheme(defaultTheme);
+                }}
               >
-                <strong>{theme.name}</strong>
-                <span>{theme.tags.join(", ")}</span>
+                Reset to default
               </button>
-            ))}
-          </div>
-          <button
-            onClick={() => {
-              const defaultTheme = themes.find((t) => t.id === "apple-glass-white-default");
-              if (defaultTheme) void applyTheme(defaultTheme);
-            }}
-          >
-            Reset to default
-          </button>
-        </main>
-      )}
+            </div>
+            <div className="theme-grid">
+              {availableThemes.map((theme) => (
+                <button
+                  key={theme.id}
+                  className={`theme-card ${themeId === theme.id ? "selected" : ""}`}
+                  onClick={() => applyTheme(theme)}
+                >
+                  <strong>{theme.name}</strong>
+                  <span>{theme.tags.join(", ") || "theme preset"}</span>
+                </button>
+              ))}
+            </div>
+          </main>
+        )}
+      </div>
     </div>
   );
 }
