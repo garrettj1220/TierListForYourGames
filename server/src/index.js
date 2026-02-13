@@ -173,7 +173,8 @@ async function fetchSteamOwnedGames(steamId) {
   });
   const response = await fetch(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?${params.toString()}`);
   const json = await response.json();
-  return json?.response?.games ?? [];
+  const games = json?.response?.games ?? [];
+  return games.filter((game) => Number(game?.playtime_forever ?? 0) > 0);
 }
 
 async function fetchSteamPersonaName(steamId) {
