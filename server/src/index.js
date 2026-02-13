@@ -52,6 +52,10 @@ function frontendUrl() {
   return process.env.FRONTEND_URL || "http://localhost:5173";
 }
 
+app.get("/", (_req, res) => {
+  res.status(200).json({ ok: true, service: "tier-list-api" });
+});
+
 app.get("/api/v1/health", (_req, res) => {
   res.json({
     ok: true,
