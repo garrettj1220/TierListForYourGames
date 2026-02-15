@@ -60,8 +60,7 @@ const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
   .replace(/\/$/, "");
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
-const DRAG_EDGE_HYSTERESIS_PX = 4;
-const DRAG_INDEX_FLIP_GUARD_MS = 70;
+const DRAG_EDGE_HYSTERESIS_PX = 7;
 const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
 const AUTO_SCROLL_HOLD_MS = 900;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
@@ -170,7 +169,6 @@ function App() {
   const autoScrollRafRef = useRef<number | null>(null);
   const dragGameIdRef = useRef<string | null>(null);
   const dragOverRef = useRef<DragLocation | null>(null);
-  const dragOverUpdatedAtRef = useRef(0);
   const tierAutosaveTimeoutRef = useRef<number | null>(null);
   const tierStateReadyRef = useRef(false);
   const lastSavedTierStateRef = useRef(serializeTierState(DEFAULT_TIER_STATE));
@@ -281,21 +279,11 @@ function App() {
       setTouchDrag((prev) => (prev ? { ...prev, x: event.clientX, y: event.clientY } : prev));
       const nextLocation = locationFromPoint(event.clientX, event.clientY);
       if (!nextLocation) return;
-      const now = performance.now();
       setDragOver((prev) => {
         if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
           return prev;
         }
-        if (
-          prev &&
-          prev.target === nextLocation.target &&
-          Math.abs(prev.index - nextLocation.index) === 1 &&
-          now - dragOverUpdatedAtRef.current < DRAG_INDEX_FLIP_GUARD_MS
-        ) {
-          return prev;
-        }
         dragOverRef.current = nextLocation;
-        dragOverUpdatedAtRef.current = now;
         return nextLocation;
       });
     };
@@ -980,7 +968,6 @@ function App() {
     setDragOrigin({ target, index });
     setDragOver({ target, index });
     dragOverRef.current = { target, index };
-    dragOverUpdatedAtRef.current = performance.now();
     setTouchDrag({
       pointerId: e.pointerId,
       pointerType: e.pointerType,
@@ -1004,7 +991,6 @@ function App() {
     setDragOrigin(null);
     setDragOver(null);
     dragOverRef.current = null;
-    dragOverUpdatedAtRef.current = 0;
     setTouchDrag(null);
     dragPointerYRef.current = null;
   }
@@ -1059,21 +1045,11 @@ function App() {
     setTouchDrag((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
     const nextLocation = locationFromPoint(e.clientX, e.clientY);
     if (!nextLocation) return;
-    const now = performance.now();
     setDragOver((prev) => {
       if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
         return prev;
       }
-      if (
-        prev &&
-        prev.target === nextLocation.target &&
-        Math.abs(prev.index - nextLocation.index) === 1 &&
-        now - dragOverUpdatedAtRef.current < DRAG_INDEX_FLIP_GUARD_MS
-      ) {
-        return prev;
-      }
       dragOverRef.current = nextLocation;
-      dragOverUpdatedAtRef.current = now;
       return nextLocation;
     });
   }
@@ -1207,9 +1183,9 @@ function App() {
                   {g.coverArtUrl ? (
                     <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
                   ) : (
-                    <div className="cover-fallback cover-fallback-list">{g.title}</div>
+                    <div className="cover-fallback cover-fallback-list cover-fallback-empty" aria-label="No cover art" />
                   )}
-                  <div>
+                  <div className="game-meta">
                     <strong>{g.title}</strong>
                     <span>{g.platform}</span>
                   </div>
@@ -1269,7 +1245,7 @@ function App() {
                                 onError={() => markCoverLoadFailure(token.id)}
                               />
                             ) : (
-                              <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                              <div className="cover-fallback cover-fallback-tier cover-fallback-empty" aria-label="No cover art" />
                             )}
                             <span>{game.title}</span>
                           </article>
@@ -1314,7 +1290,7 @@ function App() {
                               onError={() => markCoverLoadFailure(id)}
                             />
                         ) : (
-                          <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                          <div className="cover-fallback cover-fallback-tier cover-fallback-empty" aria-label="No cover art" />
                         )}
                         <span>{game.title}</span>
                       </article>
@@ -1390,7 +1366,7 @@ function App() {
                 {game.coverArtUrl ? (
                   <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
                 ) : (
-                  <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                  <div className="cover-fallback cover-fallback-tier cover-fallback-empty" aria-label="No cover art" />
                 )}
                 <span>{game.title}</span>
               </>

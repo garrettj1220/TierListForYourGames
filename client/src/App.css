@@ -252,10 +252,22 @@ body {
   overflow: hidden;
 }
 
+.cover-fallback-empty {
+  color: transparent;
+  background: linear-gradient(160deg, #0b1220 0%, #1f2937 55%, #111827 100%);
+  border: 1px solid color-mix(in srgb, var(--line), #93a4be 28%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
 .cover-fallback-list {
   width: 52px;
   aspect-ratio: 264 / 374;
   font-size: 0.58rem;
+}
+
+.game-meta {
+  display: grid;
+  gap: 4px;
 }
 
 .game-item span {
@@ -385,6 +397,14 @@ body {
   position: relative;
 }
 
+.tier-item-slot.is-drag-origin {
+  flex-basis: 0;
+  width: 0;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
 .tier-insert-slot {
   width: clamp(86px, 8.8vw, 124px);
   aspect-ratio: 264 / 374;
@@ -420,9 +440,14 @@ body {
 }
 
 .tier-game.is-origin-placeholder {
-  opacity: 1;
-  background: color-mix(in srgb, var(--panel), #9ca3af 22%);
-  border-style: dashed;
+  opacity: 0;
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  gap: 0;
+  overflow: hidden;
 }
 
 .tier-origin-placeholder {
