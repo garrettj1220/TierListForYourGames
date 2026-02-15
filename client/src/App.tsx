@@ -356,37 +356,38 @@ function App() {
       // ignore storage access failures
     }
     window.history.replaceState({}, "", window.location.pathname);
-    void (async () => {
-      await refreshAll();
-      setScreen(targetScreen);
-      if (authPopup) {
-        try {
-          if (window.opener && !window.opener.closed) {
-            window.opener.postMessage(
-              {
-                type: AUTH_MESSAGE_TYPE,
-                steam,
-                username: callbackUsername || clientUserIdRef.current || ""
-              },
-              "*"
-            );
-          }
-        } catch {
-          // ignore opener errors
+    if (authPopup) {
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(
+            {
+              type: AUTH_MESSAGE_TYPE,
+              steam,
+              username: callbackUsername || clientUserIdRef.current || ""
+            },
+            "*"
+          );
+          window.opener.focus();
         }
-        try {
-          if (window.opener && !window.opener.closed) {
-            window.opener.focus();
-          }
-        } catch {
-          // ignore opener errors
-        }
-        window.close();
+      } catch {
+        // ignore opener errors
+      }
+      window.close();
+      window.setTimeout(() => {
         if (toolsReturnUrl && /^https?:\/\//i.test(toolsReturnUrl)) {
           window.location.replace(toolsReturnUrl);
         } else {
           window.location.replace("/tools");
         }
+      }, 150);
+      return;
+    }
+    void (async () => {
+      try {
+        await refreshAll();
+        setScreen(targetScreen);
+      } catch {
+        setScreen(targetScreen);
       }
     })();
   }, []);
