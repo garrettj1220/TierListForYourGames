@@ -61,6 +61,7 @@ const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const DRAG_EDGE_HYSTERESIS_PX = 10;
+const REORDER_EDGE_ZONE_PX = 16;
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
 const USERNAME_STORAGE_KEY = "tierlist_username";
@@ -883,37 +884,50 @@ function App() {
     const cardEl = node?.closest<HTMLElement>("[data-drop-card='true']");
     if (cardEl) {
       const target = cardEl.dataset.target as DropTarget;
+      const isSameCategoryDrag = dragOrigin?.target === target;
+      const ids = target === "UNRANKED" ? tierState.unranked : tierState.tiers[target];
+      if (!isSameCategoryDrag) {
+        return { target, index: ids.length };
+      }
       if (target === "UNRANKED") {
-        return { target, index: tierState.unranked.length };
+        return { target, index: ids.length };
       }
       const index = Number(cardEl.dataset.index || 0);
       const rect = cardEl.getBoundingClientRect();
-      const midpoint = rect.left + rect.width / 2;
-      const distanceToMid = Math.abs(x - midpoint);
-      if (
-        distanceToMid <= DRAG_EDGE_HYSTERESIS_PX &&
-        dragOver?.target === target &&
-        (dragOver.index === index || dragOver.index === index + 1)
-      ) {
-        return { target, index: dragOver.index };
-      }
-      const after = x > midpoint;
-      return { target, index: index + (after ? 1 : 0) };
+      const leftEdgeZone = rect.left + REORDER_EDGE_ZONE_PX;
+      const rightEdgeZone = rect.right - REORDER_EDGE_ZONE_PX;
+      if (x <= leftEdgeZone) return { target, index };
+      if (x >= rightEdgeZone) return { target, index: index + 1 };
+      return { target, index: ids.length };
     }
     const rowEl = node?.closest<HTMLElement>("[data-drop-row='true']");
     if (rowEl) {
       const target = rowEl.dataset.target as DropTarget;
+      const isSameCategoryDrag = dragOrigin?.target === target;
+      const ids = target === "UNRANKED" ? tierState.unranked : tierState.tiers[target];
+      if (!isSameCategoryDrag) {
+        return { target, index: ids.length };
+      }
       if (target === "UNRANKED") {
-        const index = Number(rowEl.dataset.count || 0);
-        return { target, index };
+        return { target, index: ids.length };
       }
       const cardEls = Array.from(rowEl.querySelectorAll<HTMLElement>("[data-drop-card='true']"));
+      if (cardEls.length === 0) return { target, index: 0 };
+
+      const lastRect = cardEls[cardEls.length - 1].getBoundingClientRect();
+      if (x >= lastRect.right - DRAG_EDGE_HYSTERESIS_PX && y >= lastRect.top - DRAG_EDGE_HYSTERESIS_PX) {
+        return { target, index: cardEls.length };
+      }
+
       for (let i = 0; i < cardEls.length; i += 1) {
         const rect = cardEls[i].getBoundingClientRect();
         if (y < rect.top) return { target, index: i };
         if (y <= rect.bottom) {
-          const midpoint = rect.left + rect.width / 2;
-          return { target, index: x < midpoint ? i : i + 1 };
+          const leftEdgeZone = rect.left + REORDER_EDGE_ZONE_PX;
+          const rightEdgeZone = rect.right - REORDER_EDGE_ZONE_PX;
+          if (x <= leftEdgeZone) return { target, index: i };
+          if (x >= rightEdgeZone) return { target, index: i + 1 };
+          return { target, index: cardEls.length };
         }
       }
       return { target, index: cardEls.length };
@@ -926,7 +940,14 @@ function App() {
     e.preventDefault();
     dragPointerYRef.current = e.clientY;
     setTouchDrag((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
-    setDragOver(locationFromPoint(e.clientX, e.clientY));
+    const nextLocation = locationFromPoint(e.clientX, e.clientY);
+    if (!nextLocation) return;
+    setDragOver((prev) => {
+      if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
+        return prev;
+      }
+      return nextLocation;
+    });
   }
 
   function onTouchPointerUp(e: React.PointerEvent<HTMLElement>) {
@@ -1108,13 +1129,16 @@ function App() {
                   {tierState.tiers[tier].map((id, idx) => {
                     const game = gameMap.get(id);
                     if (!game) return null;
+                    const isOriginDragging =
+                      dragGameId === id && originPlaceholderActive && dragOrigin?.target === tier && dragOrigin.index === idx;
+                    if (isOriginDragging) return null;
                     return (
                       <div key={id} className="tier-item-slot">
                         {dragGameId && dragOver?.target === tier && dragOver.index === idx && (
                           <div className="tier-insert-slot" aria-hidden="true" />
                         )}
                         <article
-                          className={`tier-game ${dragGameId === id && originPlaceholderActive && dragOrigin?.target === tier && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
+                          className="tier-game"
                           data-drop-card="true"
                           data-target={tier}
                           data-index={idx}
@@ -1153,10 +1177,13 @@ function App() {
                 {tierState.unranked.map((id, idx) => {
                   const game = gameMap.get(id);
                   if (!game) return null;
+                  const isOriginDragging =
+                    dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx;
+                  if (isOriginDragging) return null;
                   return (
                     <div key={id} className="tier-item-slot">
                       <article
-                        className={`tier-game ${dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
+                        className="tier-game"
                         data-drop-card="true"
                         data-target="UNRANKED"
                         data-index={idx}
