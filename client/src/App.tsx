@@ -474,6 +474,28 @@ function App() {
     }
   }
 
+  function logoutUsername() {
+    const currentUser = clientUserIdRef.current;
+    clientUserIdRef.current = "";
+    setUsername("");
+    setLinkedAccounts([]);
+    setGames([]);
+    setTierState(DEFAULT_TIER_STATE);
+    setThemeMode("dark");
+    setScreen("setup");
+    setStatus("Logged out.");
+    try {
+      window.localStorage.removeItem(USERNAME_STORAGE_KEY);
+      window.localStorage.removeItem(CLIENT_USER_STORAGE_KEY);
+      window.localStorage.removeItem(POST_AUTH_SCREEN_STORAGE_KEY);
+      if (currentUser) {
+        window.localStorage.removeItem(getThemeStorageKey(currentUser));
+      }
+    } catch {
+      // ignore storage access failures
+    }
+  }
+
   async function setMode(mode: ThemeMode) {
     setThemeMode(mode);
     await apiFetch("/api/v1/users/me/theme", {
@@ -856,6 +878,7 @@ function App() {
           <p>{hasUsername ? `@${username}` : "No username yet"}</p>
         </div>
         <div className="header-actions">
+          {hasUsername && <button onClick={logoutUsername}>Log Out</button>}
           <button onClick={() => void setMode(themeMode === "dark" ? "light" : "dark")}>
             {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
           </button>
