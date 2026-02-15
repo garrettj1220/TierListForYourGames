@@ -354,14 +354,25 @@ body {
 }
 
 .tier-cards {
-  display: flex;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
   gap: 8px;
   align-items: start;
   min-height: 150px;
+}
+
+.tier-cards-ranked {
+  display: flex;
+  flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 2px;
+}
+
+.tier-cards-unranked {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  overflow: visible;
 }
 
 .tier-cards.is-empty {
@@ -380,6 +391,11 @@ body {
   border: 2px dashed color-mix(in srgb, var(--line), #dbeafe 48%);
   background: color-mix(in srgb, var(--panel-2), #94a3b8 28%);
   flex: 0 0 auto;
+}
+
+.tier-cards-unranked .tier-item-slot {
+  flex: initial;
+  min-width: 0;
 }
 
 .tier-game {
@@ -497,6 +513,27 @@ body {
   .tier-insert-slot {
     width: 92px;
     flex-basis: 92px;
+  }
+}
+
+@media (max-width: 1420px) {
+  .tier-cards,
+  .tier-cards-unranked {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1120px) {
+  .tier-cards,
+  .tier-cards-unranked {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .tier-cards,
+  .tier-cards-unranked {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 

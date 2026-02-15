@@ -963,6 +963,7 @@ function App() {
 
   function onCardDragOver(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
     if (target === "UNRANKED") return;
+    e.stopPropagation();
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     dragPointerYRef.current = e.clientY;
@@ -980,6 +981,7 @@ function App() {
 
   function onCardDrop(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
     if (target === "UNRANKED") return;
+    e.stopPropagation();
     e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
     const after = e.clientX > rect.left + rect.width / 2;
@@ -1150,7 +1152,7 @@ function App() {
                 <header>
                   <span className="tier-label">{tier}</span>
                 </header>
-                <div className={`tier-cards ${tierState.tiers[tier].length === 0 ? "is-empty" : ""}`}>
+                <div className={`tier-cards tier-cards-ranked ${tierState.tiers[tier].length === 0 ? "is-empty" : ""}`}>
                   {tierState.tiers[tier].map((id, idx) => {
                     const game = gameMap.get(id);
                     if (!game) return null;
@@ -1202,7 +1204,7 @@ function App() {
               <header>
                 <span className="tier-label">Unranked</span>
               </header>
-              <div className={`tier-cards ${tierState.unranked.length === 0 ? "is-empty" : ""}`}>
+              <div className={`tier-cards tier-cards-unranked ${tierState.unranked.length === 0 ? "is-empty" : ""}`}>
                 {tierState.unranked.map((id, idx) => {
                   const game = gameMap.get(id);
                   if (!game) return null;
