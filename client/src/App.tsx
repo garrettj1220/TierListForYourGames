@@ -117,9 +117,11 @@ function App() {
   const dragImageRef = useRef<HTMLElement | null>(null);
 
   function apiFetch(path: string, init: RequestInit = {}) {
+    const requestUrl = new URL(apiUrl(path), window.location.origin);
+    requestUrl.searchParams.set("client_user_id", clientUserIdRef.current);
     const headers = new Headers(init.headers ?? {});
     headers.set("x-client-user-id", clientUserIdRef.current);
-    return fetch(apiUrl(path), { ...init, headers });
+    return fetch(requestUrl.toString(), { ...init, headers });
   }
 
   const gameMap = useMemo(() => {
