@@ -389,7 +389,7 @@ body {
   align-content: start;
   cursor: grab;
   user-select: none;
-  -webkit-user-drag: none;
+  -webkit-user-drag: element;
   touch-action: none;
   -webkit-touch-callout: none;
 }
@@ -444,6 +444,8 @@ body {
   height: auto;
   border-radius: 6px;
   object-fit: cover;
+  pointer-events: none;
+  -webkit-user-drag: none;
 }
 
 .cover-fallback-tier {
@@ -456,6 +458,7 @@ body {
 .tier-game span {
   font-size: 0.78rem;
   line-height: 1.2;
+  pointer-events: none;
 }
 
 @keyframes tierDropFlash {
