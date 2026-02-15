@@ -441,6 +441,7 @@ function App() {
 
   function dropGame(gameId: string, target: DropTarget, insertIndex?: number) {
     const dropIndex = Math.max(0, Number(insertIndex ?? 0));
+    const origin = dragOrigin;
     setDropFlashTarget(target);
     setTierState((prev) => {
       const next: TierListState = {
@@ -448,12 +449,16 @@ function App() {
         tiers: { S: [...prev.tiers.S], A: [...prev.tiers.A], B: [...prev.tiers.B], C: [...prev.tiers.C], D: [...prev.tiers.D], F: [...prev.tiers.F] },
         unranked: [...prev.unranked]
       };
+      let adjustedIndex = dropIndex;
+      if (origin && origin.target === target && origin.index < adjustedIndex) {
+        adjustedIndex -= 1;
+      }
       next.unranked = next.unranked.filter((id) => id !== gameId);
       for (const key of TIER_KEYS) next.tiers[key] = next.tiers[key].filter((id) => id !== gameId);
       if (target === "UNRANKED") {
-        next.unranked.splice(Math.min(dropIndex, next.unranked.length), 0, gameId);
+        next.unranked.splice(Math.min(adjustedIndex, next.unranked.length), 0, gameId);
       } else {
-        next.tiers[target].splice(Math.min(dropIndex, next.tiers[target].length), 0, gameId);
+        next.tiers[target].splice(Math.min(adjustedIndex, next.tiers[target].length), 0, gameId);
       }
       return next;
     });
@@ -576,7 +581,9 @@ function App() {
     if (cardEl) {
       const target = cardEl.dataset.target as DropTarget;
       const index = Number(cardEl.dataset.index || 0);
-      return { target, index };
+      const rect = cardEl.getBoundingClientRect();
+      const after = x > rect.left + rect.width / 2;
+      return { target, index: index + (after ? 1 : 0) };
     }
     const rowEl = node?.closest<HTMLElement>("[data-drop-row='true']");
     if (rowEl) {
@@ -618,7 +625,9 @@ function App() {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     dragPointerYRef.current = e.clientY;
-    setDragOver({ target, index });
+    const rect = e.currentTarget.getBoundingClientRect();
+    const after = e.clientX > rect.left + rect.width / 2;
+    setDragOver({ target, index: index + (after ? 1 : 0) });
   }
 
   function onRowDrop(target: DropTarget, fallbackIndex?: number) {
