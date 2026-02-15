@@ -62,6 +62,7 @@ const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [],
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
 const POST_AUTH_SCREEN_STORAGE_KEY = "tierlist_post_auth_screen";
+const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
 
 function getOrCreateClientUserId() {
   const fallbackId = `u_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
@@ -89,11 +90,26 @@ function assetUrl(path?: string | null): string | null {
   return path;
 }
 
+function getThemeStorageKey(userId: string) {
+  return `${THEME_STORAGE_KEY_PREFIX}${userId}`;
+}
+
+function readStoredTheme(userId: string): ThemeMode {
+  try {
+    const stored = window.localStorage.getItem(getThemeStorageKey(userId));
+    if (stored === "light" || stored === "dark") return stored;
+  } catch {
+    // ignore storage access failures
+  }
+  return "dark";
+}
+
 function App() {
-  const clientUserIdRef = useRef(getOrCreateClientUserId());
+  const initialClientUserId = getOrCreateClientUserId();
+  const clientUserIdRef = useRef(initialClientUserId);
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState<Screen>("setup");
-  const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readStoredTheme(initialClientUserId));
   const [linkedAccounts, setLinkedAccounts] = useState<LinkedAccount[]>([]);
   const [games, setGames] = useState<Game[]>([]);
   const [tierState, setTierState] = useState<TierListState>(DEFAULT_TIER_STATE);
@@ -147,6 +163,11 @@ function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", themeMode);
+    try {
+      window.localStorage.setItem(getThemeStorageKey(clientUserIdRef.current), themeMode);
+    } catch {
+      // ignore storage access failures
+    }
   }, [themeMode]);
 
   useEffect(() => {

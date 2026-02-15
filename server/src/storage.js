@@ -404,7 +404,7 @@ class PgStorage {
           : { userId, tiers: DEFAULT_TIERS, unranked: [], updatedAt: null },
         theme: themeResult.rows[0]
           ? { userId, themeId: themeResult.rows[0].theme_id }
-          : { userId, themeId: "light" }
+          : { userId, themeId: "dark" }
       };
     } finally {
       client.release();
