@@ -320,7 +320,18 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const steam = params.get("steam");
+    const callbackUsername = params.get("username");
     if (!steam) return;
+    if (callbackUsername && /^[A-Za-z0-9_]{3,24}$/.test(callbackUsername)) {
+      clientUserIdRef.current = callbackUsername;
+      setUsername(callbackUsername);
+      try {
+        window.localStorage.setItem(USERNAME_STORAGE_KEY, callbackUsername);
+        window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, callbackUsername);
+      } catch {
+        // ignore storage access failures
+      }
+    }
     if (steam === "linked") setStatus("Steam account connected.");
     if (steam === "linked_no_key") setStatus("Steam connected. Add STEAM_WEB_API_KEY to sync games.");
     if (steam === "linked_sync_failed") setStatus("Steam connected. Game sync failed.");
@@ -558,6 +569,14 @@ function App() {
     }
     const opened = window.open(target, "_blank", "noopener,noreferrer");
     if (!opened) {
+      try {
+        if (window.top && window.top !== window.self) {
+          window.top.location.href = "/tools";
+          return;
+        }
+      } catch {
+        // ignore cross-window access errors
+      }
       window.location.href = target;
     }
   }

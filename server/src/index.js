@@ -278,15 +278,15 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
       try {
         const games = await fetchSteamOwnedGames(steamId);
         await storage.ingestSteamLibrary(userId, linked.id, games);
-        return res.redirect(`${frontend}/?steam=linked`);
+        return res.redirect(`${frontend}/?steam=linked&username=${encodeURIComponent(userId)}`);
       } catch {
-        return res.redirect(`${frontend}/?steam=linked_sync_failed`);
+        return res.redirect(`${frontend}/?steam=linked_sync_failed&username=${encodeURIComponent(userId)}`);
       }
     }
 
-    return res.redirect(`${frontend}/?steam=linked_no_key`);
+    return res.redirect(`${frontend}/?steam=linked_no_key&username=${encodeURIComponent(userId)}`);
   } catch {
-    return res.redirect(`${frontend}/?steam=failed`);
+    return res.redirect(`${frontend}/?steam=failed&username=${encodeURIComponent(userId)}`);
   }
 });
 
