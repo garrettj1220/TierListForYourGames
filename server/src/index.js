@@ -51,6 +51,22 @@ function frontendUrl() {
   return process.env.FRONTEND_URL || "http://localhost:5173";
 }
 
+function queryValue(req, key) {
+  const value = req.query?.[key];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function readFromOpenIdReturnTo(req, key) {
+  const rawReturnTo = queryValue(req, "openid.return_to");
+  if (!rawReturnTo || typeof rawReturnTo !== "string") return null;
+  try {
+    const parsed = new URL(rawReturnTo);
+    return parsed.searchParams.get(key);
+  } catch {
+    return null;
+  }
+}
+
 function safeFrontendUrl(value) {
   const candidate = String(value || "").trim();
   if (!candidate) return null;
@@ -67,8 +83,12 @@ function safeFrontendUrl(value) {
 }
 
 function resolveFrontendUrl(req) {
-  const fromQuery = safeFrontendUrl(req.query?.frontend_url);
+  const fromQuery = safeFrontendUrl(queryValue(req, "frontend_url"));
   if (fromQuery) return fromQuery;
+  const fromOpenIdReturnToQuery = safeFrontendUrl(readFromOpenIdReturnTo(req, "frontend_url"));
+  if (fromOpenIdReturnToQuery) return fromOpenIdReturnToQuery;
+  const fromOpenIdReturnToRoot = safeFrontendUrl(queryValue(req, "openid.return_to"));
+  if (fromOpenIdReturnToRoot) return fromOpenIdReturnToRoot;
   const fromEnv = safeFrontendUrl(process.env.FRONTEND_URL);
   if (fromEnv) return fromEnv;
   return frontendUrl();
@@ -91,8 +111,9 @@ function normalizeClientUserId(value) {
 
 function requireUserId(req, res) {
   const fromHeader = req.get("x-client-user-id");
-  const fromQuery = req.query?.client_user_id;
-  const userId = normalizeClientUserId(fromHeader || fromQuery);
+  const fromQuery = queryValue(req, "client_user_id");
+  const fromOpenIdReturnTo = readFromOpenIdReturnTo(req, "client_user_id");
+  const userId = normalizeClientUserId(fromHeader || fromQuery || fromOpenIdReturnTo);
   if (!userId) {
     res.status(400).json({ error: "Missing or invalid client user id" });
     return null;
