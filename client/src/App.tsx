@@ -970,16 +970,18 @@ function App() {
     setDragOver({ target, index: index + (after ? 1 : 0) });
   }
 
-  function onRowDrop(target: DropTarget, fallbackIndex?: number) {
-    if (!dragGameId) return;
-    dropGame(dragGameId, target, resolveDropIndex(target, fallbackIndex));
+  function onRowDrop(target: DropTarget, e: React.DragEvent<HTMLElement>, fallbackIndex?: number) {
+    e.preventDefault();
+    const gameId = dragGameId || e.dataTransfer.getData("text/plain");
+    if (!gameId) return;
+    dropGame(gameId, target, resolveDropIndex(target, fallbackIndex));
   }
 
   function onCardDrop(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
     e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
     const after = e.clientX > rect.left + rect.width / 2;
-    onRowDrop(target, index + (after ? 1 : 0));
+    onRowDrop(target, e, index + (after ? 1 : 0));
   }
 
   return (
@@ -1141,7 +1143,7 @@ function App() {
                 data-count={tierState.tiers[tier].length}
                 className={`tier-row tier-${tier}${dropFlashTarget === tier ? " tier-drop-flash" : ""}`}
                 onDragOver={(e) => onRowDragOver(tier, e)}
-                onDrop={() => onRowDrop(tier)}
+                onDrop={(e) => onRowDrop(tier, e)}
               >
                 <header>
                   <span className="tier-label">{tier}</span>
@@ -1195,7 +1197,7 @@ function App() {
               data-count={tierState.unranked.length}
               className={`tier-row tier-pool${dropFlashTarget === "UNRANKED" ? " tier-drop-flash" : ""}`}
               onDragOver={(e) => onRowDragOver("UNRANKED", e)}
-              onDrop={() => onRowDrop("UNRANKED")}
+              onDrop={(e) => onRowDrop("UNRANKED", e)}
             >
               <header>
                 <span className="tier-label">Unranked</span>
