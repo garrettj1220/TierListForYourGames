@@ -197,6 +197,17 @@ function App() {
   }, [dragGameId, touchDrag]);
 
   useEffect(() => {
+    if (!dragGameId) return;
+    const wheelOptions: AddEventListenerOptions = { passive: false };
+    const onWheelWhileDragging = (event: WheelEvent) => {
+      event.preventDefault();
+      window.scrollBy({ top: event.deltaY, behavior: "auto" });
+    };
+    window.addEventListener("wheel", onWheelWhileDragging, wheelOptions);
+    return () => window.removeEventListener("wheel", onWheelWhileDragging, wheelOptions);
+  }, [dragGameId]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const steam = params.get("steam");
     if (!steam) return;
