@@ -61,6 +61,9 @@ const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const DRAG_EDGE_HYSTERESIS_PX = 4;
+const DRAG_INDEX_FLIP_GUARD_MS = 70;
+const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
+const AUTO_SCROLL_HOLD_MS = 900;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
@@ -162,9 +165,12 @@ function App() {
   const [searching, setSearching] = useState(false);
   const dragImageRef = useRef<HTMLElement | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
+  const autoScrollEdgeEnteredAtRef = useRef<number | null>(null);
+  const autoScrollEdgeDirectionRef = useRef<-1 | 0 | 1>(0);
   const autoScrollRafRef = useRef<number | null>(null);
   const dragGameIdRef = useRef<string | null>(null);
   const dragOverRef = useRef<DragLocation | null>(null);
+  const dragOverUpdatedAtRef = useRef(0);
   const tierAutosaveTimeoutRef = useRef<number | null>(null);
   const tierStateReadyRef = useRef(false);
   const lastSavedTierStateRef = useRef(serializeTierState(DEFAULT_TIER_STATE));
@@ -275,11 +281,21 @@ function App() {
       setTouchDrag((prev) => (prev ? { ...prev, x: event.clientX, y: event.clientY } : prev));
       const nextLocation = locationFromPoint(event.clientX, event.clientY);
       if (!nextLocation) return;
+      const now = performance.now();
       setDragOver((prev) => {
         if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
           return prev;
         }
+        if (
+          prev &&
+          prev.target === nextLocation.target &&
+          Math.abs(prev.index - nextLocation.index) === 1 &&
+          now - dragOverUpdatedAtRef.current < DRAG_INDEX_FLIP_GUARD_MS
+        ) {
+          return prev;
+        }
         dragOverRef.current = nextLocation;
+        dragOverUpdatedAtRef.current = now;
         return nextLocation;
       });
     };
@@ -311,21 +327,39 @@ function App() {
 
   useEffect(() => {
     if (!dragGameId) return;
-    if (touchDrag?.pointerType !== "touch") return;
     const step = () => {
       const y = dragPointerYRef.current;
+      const now = performance.now();
       if (typeof y === "number") {
-        const threshold = 130;
         const viewport = window.innerHeight;
         const topDistance = y;
         const bottomDistance = viewport - y;
         let delta = 0;
-        if (topDistance < threshold) {
-          const intensity = (threshold - topDistance) / threshold;
-          delta = -Math.max(6, intensity * 24);
-        } else if (bottomDistance < threshold) {
-          const intensity = (threshold - bottomDistance) / threshold;
-          delta = Math.max(6, intensity * 24);
+        let nextDirection: -1 | 0 | 1 = 0;
+        if (topDistance < AUTO_SCROLL_EDGE_THRESHOLD_PX) {
+          nextDirection = -1;
+        } else if (bottomDistance < AUTO_SCROLL_EDGE_THRESHOLD_PX) {
+          nextDirection = 1;
+        }
+
+        if (nextDirection === 0) {
+          autoScrollEdgeDirectionRef.current = 0;
+          autoScrollEdgeEnteredAtRef.current = null;
+        } else {
+          if (autoScrollEdgeDirectionRef.current !== nextDirection) {
+            autoScrollEdgeDirectionRef.current = nextDirection;
+            autoScrollEdgeEnteredAtRef.current = now;
+          }
+          const enteredAt = autoScrollEdgeEnteredAtRef.current ?? now;
+          if (now - enteredAt >= AUTO_SCROLL_HOLD_MS) {
+            if (nextDirection < 0) {
+              const intensity = (AUTO_SCROLL_EDGE_THRESHOLD_PX - topDistance) / AUTO_SCROLL_EDGE_THRESHOLD_PX;
+              delta = -Math.max(6, intensity * 24);
+            } else {
+              const intensity = (AUTO_SCROLL_EDGE_THRESHOLD_PX - bottomDistance) / AUTO_SCROLL_EDGE_THRESHOLD_PX;
+              delta = Math.max(6, intensity * 24);
+            }
+          }
         }
         if (delta !== 0) {
           window.scrollBy({ top: delta, behavior: "auto" });
@@ -339,6 +373,8 @@ function App() {
         window.cancelAnimationFrame(autoScrollRafRef.current);
       }
       autoScrollRafRef.current = null;
+      autoScrollEdgeDirectionRef.current = 0;
+      autoScrollEdgeEnteredAtRef.current = null;
     };
   }, [dragGameId, touchDrag]);
 
@@ -944,6 +980,7 @@ function App() {
     setDragOrigin({ target, index });
     setDragOver({ target, index });
     dragOverRef.current = { target, index };
+    dragOverUpdatedAtRef.current = performance.now();
     setTouchDrag({
       pointerId: e.pointerId,
       pointerType: e.pointerType,
@@ -967,6 +1004,7 @@ function App() {
     setDragOrigin(null);
     setDragOver(null);
     dragOverRef.current = null;
+    dragOverUpdatedAtRef.current = 0;
     setTouchDrag(null);
     dragPointerYRef.current = null;
   }
@@ -1021,11 +1059,21 @@ function App() {
     setTouchDrag((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
     const nextLocation = locationFromPoint(e.clientX, e.clientY);
     if (!nextLocation) return;
+    const now = performance.now();
     setDragOver((prev) => {
       if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
         return prev;
       }
+      if (
+        prev &&
+        prev.target === nextLocation.target &&
+        Math.abs(prev.index - nextLocation.index) === 1 &&
+        now - dragOverUpdatedAtRef.current < DRAG_INDEX_FLIP_GUARD_MS
+      ) {
+        return prev;
+      }
       dragOverRef.current = nextLocation;
+      dragOverUpdatedAtRef.current = now;
       return nextLocation;
     });
   }
