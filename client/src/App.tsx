@@ -60,7 +60,7 @@ const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
   .replace(/\/$/, "");
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
-const DRAG_EDGE_HYSTERESIS_PX = 10;
+const DRAG_EDGE_HYSTERESIS_PX = 4;
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
 const USERNAME_STORAGE_KEY = "tierlist_username";
@@ -154,6 +154,7 @@ function App() {
   const [manualSteamSaving, setManualSteamSaving] = useState(false);
   const [usernameDraft, setUsernameDraft] = useState("");
   const [usernameSaving, setUsernameSaving] = useState(false);
+  const [coverLoadFailures, setCoverLoadFailures] = useState<Record<string, true>>({});
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -196,11 +197,18 @@ function App() {
     const withoutCover: string[] = [];
     for (const id of tierState.unranked) {
       const game = gameMap.get(id);
-      if (game?.coverArtUrl) withCover.push(id);
+      const raw = String(game?.coverArtUrl || "").trim().toLowerCase();
+      const hasCoverUrl = Boolean(raw && raw !== "null");
+      const hasUsableCover = hasCoverUrl && !coverLoadFailures[id];
+      if (hasUsableCover) withCover.push(id);
       else withoutCover.push(id);
     }
     return [...withCover, ...withoutCover];
-  }, [tierState.unranked, gameMap]);
+  }, [tierState.unranked, gameMap, coverLoadFailures]);
+
+  function markCoverLoadFailure(gameId: string) {
+    setCoverLoadFailures((prev) => (prev[gameId] ? prev : { ...prev, [gameId]: true }));
+  }
 
   useEffect(() => {
     if (!clientUserIdRef.current) {
@@ -300,6 +308,7 @@ function App() {
 
   useEffect(() => {
     if (!dragGameId) return;
+    if (touchDrag?.pointerType !== "touch") return;
     const step = () => {
       const y = dragPointerYRef.current;
       if (typeof y === "number") {
@@ -328,7 +337,7 @@ function App() {
       }
       autoScrollRafRef.current = null;
     };
-  }, [dragGameId]);
+  }, [dragGameId, touchDrag]);
 
   useEffect(() => {
     if (!dragGameId || touchDrag) return;
@@ -874,6 +883,15 @@ function App() {
     setDragGameId(null);
   }
 
+  function previewInsertIndex(target: DropTarget) {
+    if (!dragOver || dragOver.target !== target) return null;
+    let idx = dragOver.index;
+    if (dragOrigin && dragOrigin.target === target && dragOrigin.index < idx) {
+      idx -= 1;
+    }
+    return Math.max(0, idx);
+  }
+
   async function exportPdf() {
     const { jsPDF } = await import("jspdf");
     const doc = new jsPDF({ unit: "pt", format: "a4" });
@@ -1174,39 +1192,47 @@ function App() {
                   <span className="tier-label">{tier}</span>
                 </header>
                 <div className={`tier-cards tier-cards-ranked ${tierState.tiers[tier].length === 0 ? "is-empty" : ""}`}>
-                  {tierState.tiers[tier].map((id, idx) => {
-                    const game = gameMap.get(id);
-                    if (!game) return null;
-                    const isOriginDragging =
-                      dragGameId === id &&
-                      originPlaceholderActive &&
-                      dragOrigin?.target === tier &&
-                      dragOrigin.index === idx &&
-                      dragOver?.target === tier;
-                    return (
-                      <div key={id} className={`tier-item-slot${isOriginDragging ? " is-drag-origin" : ""}`}>
-                        {dragGameId && dragOver?.target === tier && dragOver.index === idx && (
-                          <div className="tier-insert-slot" aria-hidden="true" />
-                        )}
-                        <article
-                          className={`tier-game${isOriginDragging ? " is-origin-placeholder" : ""}`}
-                          data-drop-card="true"
-                          data-target={tier}
-                          data-index={idx}
-                          onPointerDown={(e) => startTouchDrag(id, tier, idx, e)}
-                          onPointerMove={onTouchPointerMove}
-                        >
-                          {game.coverArtUrl ? (
-                              <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
-                          ) : (
-                            <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                  {(() => {
+                    const previewIndex = previewInsertIndex(tier);
+                    return tierState.tiers[tier].map((id, idx) => {
+                      const game = gameMap.get(id);
+                      if (!game) return null;
+                      const isOriginDragging =
+                        dragGameId === id &&
+                        originPlaceholderActive &&
+                        dragOrigin?.target === tier &&
+                        dragOrigin.index === idx &&
+                        dragOver?.target === tier;
+                      return (
+                        <div key={id} className={`tier-item-slot${isOriginDragging ? " is-drag-origin" : ""}`}>
+                          {dragGameId && previewIndex === idx && (
+                            <div className="tier-insert-slot" aria-hidden="true" />
                           )}
-                          <span>{game.title}</span>
-                        </article>
-                      </div>
-                    );
-                  })}
-                  {dragGameId && dragOver?.target === tier && dragOver.index === tierState.tiers[tier].length && (
+                          <article
+                            className={`tier-game${isOriginDragging ? " is-origin-placeholder" : ""}`}
+                            data-drop-card="true"
+                            data-target={tier}
+                            data-index={idx}
+                            onPointerDown={(e) => startTouchDrag(id, tier, idx, e)}
+                            onPointerMove={onTouchPointerMove}
+                          >
+                            {game.coverArtUrl ? (
+                                <img
+                                  src={assetUrl(game.coverArtUrl) ?? undefined}
+                                  alt={game.title}
+                                  draggable={false}
+                                  onError={() => markCoverLoadFailure(id)}
+                                />
+                            ) : (
+                              <div className="cover-fallback cover-fallback-tier">{game.title}</div>
+                            )}
+                            <span>{game.title}</span>
+                          </article>
+                        </div>
+                      );
+                    });
+                  })()}
+                  {dragGameId && previewInsertIndex(tier) === tierState.tiers[tier].length && (
                     <div className="tier-insert-slot is-end" aria-hidden="true" />
                   )}
                 </div>
@@ -1243,7 +1269,12 @@ function App() {
                         onPointerMove={onTouchPointerMove}
                       >
                         {game.coverArtUrl ? (
-                            <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
+                            <img
+                              src={assetUrl(game.coverArtUrl) ?? undefined}
+                              alt={game.title}
+                              draggable={false}
+                              onError={() => markCoverLoadFailure(id)}
+                            />
                         ) : (
                           <div className="cover-fallback cover-fallback-tier">{game.title}</div>
                         )}
