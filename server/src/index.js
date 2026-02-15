@@ -111,7 +111,7 @@ async function clearLegacySharedWorkspace() {
 function normalizeClientUserId(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
-  if (!/^[A-Za-z0-9_-]{8,80}$/.test(raw)) return null;
+  if (!/^[A-Za-z0-9_]{3,24}$/.test(raw)) return null;
   return raw;
 }
 
@@ -217,9 +217,13 @@ app.get("/api/v1/accounts/steam/start", (req, res) => {
   if (!userId) return;
   const baseUrl = appUrl(req);
   const frontend = resolveFrontendUrl(req);
+  const authPopup = queryValue(req, "auth_popup") === "1" ? "1" : "0";
+  const toolsReturnUrl = safeFrontendUrl(queryValue(req, "tools_return_url"));
   const returnToUrl = new URL(`${baseUrl}/api/v1/accounts/steam/callback`);
   returnToUrl.searchParams.set("client_user_id", userId);
   returnToUrl.searchParams.set("frontend_url", frontend);
+  if (authPopup === "1") returnToUrl.searchParams.set("auth_popup", "1");
+  if (toolsReturnUrl) returnToUrl.searchParams.set("tools_return_url", toolsReturnUrl);
   const realm = baseUrl;
   const params = new URLSearchParams({
     "openid.ns": "http://specs.openid.net/auth/2.0",
@@ -236,6 +240,8 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const frontend = resolveFrontendUrl(req);
+  const authPopup = readFromOpenIdReturnTo(req, "auth_popup") === "1" || queryValue(req, "auth_popup") === "1";
+  const toolsReturnUrl = safeFrontendUrl(readFromOpenIdReturnTo(req, "tools_return_url") || queryValue(req, "tools_return_url"));
   const q = req.query;
   const mode = q["openid.mode"];
   const claimedId = q["openid.claimed_id"];
@@ -257,7 +263,7 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
       body: verifyParams.toString()
     });
     const verifyText = await verifyResp.text();
-    if (!verifyText.includes("is_valid:true")) {
+    if (!/\bis_valid\s*:\s*true\b/i.test(verifyText)) {
       return res.redirect(`${frontend}/?steam=failed`);
     }
 
@@ -278,15 +284,31 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
       try {
         const games = await fetchSteamOwnedGames(steamId);
         await storage.ingestSteamLibrary(userId, linked.id, games);
-        return res.redirect(`${frontend}/?steam=linked&username=${encodeURIComponent(userId)}`);
+        return res.redirect(
+          `${frontend}/?steam=linked&username=${encodeURIComponent(userId)}${authPopup ? "&auth_popup=1" : ""}${
+            toolsReturnUrl ? `&tools_return_url=${encodeURIComponent(toolsReturnUrl)}` : ""
+          }`
+        );
       } catch {
-        return res.redirect(`${frontend}/?steam=linked_sync_failed&username=${encodeURIComponent(userId)}`);
+        return res.redirect(
+          `${frontend}/?steam=linked_sync_failed&username=${encodeURIComponent(userId)}${authPopup ? "&auth_popup=1" : ""}${
+            toolsReturnUrl ? `&tools_return_url=${encodeURIComponent(toolsReturnUrl)}` : ""
+          }`
+        );
       }
     }
 
-    return res.redirect(`${frontend}/?steam=linked_no_key&username=${encodeURIComponent(userId)}`);
+    return res.redirect(
+      `${frontend}/?steam=linked_no_key&username=${encodeURIComponent(userId)}${authPopup ? "&auth_popup=1" : ""}${
+        toolsReturnUrl ? `&tools_return_url=${encodeURIComponent(toolsReturnUrl)}` : ""
+      }`
+    );
   } catch {
-    return res.redirect(`${frontend}/?steam=failed&username=${encodeURIComponent(userId)}`);
+    return res.redirect(
+      `${frontend}/?steam=failed&username=${encodeURIComponent(userId)}${authPopup ? "&auth_popup=1" : ""}${
+        toolsReturnUrl ? `&tools_return_url=${encodeURIComponent(toolsReturnUrl)}` : ""
+      }`
+    );
   }
 });
 

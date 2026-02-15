@@ -65,7 +65,7 @@ const USERNAME_STORAGE_KEY = "tierlist_username";
 const POST_AUTH_SCREEN_STORAGE_KEY = "tierlist_post_auth_screen";
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
 const USER_DATA_STORAGE_KEY_PREFIX = "tierlist_user_data_";
-const CANONICAL_HOST = "tierlist.studiojpg.co";
+const AUTH_RESULT_STORAGE_KEY = "tierlist_auth_result";
 
 function readStoredUsername() {
   try {
@@ -187,16 +187,6 @@ function App() {
   }, [linkedAccounts]);
 
   useEffect(() => {
-    if (
-      window.location.hostname &&
-      window.location.hostname !== "localhost" &&
-      window.location.hostname !== "127.0.0.1" &&
-      window.location.hostname !== CANONICAL_HOST
-    ) {
-      window.location.replace(`https://${CANONICAL_HOST}${window.location.pathname}${window.location.search}${window.location.hash}`);
-      return;
-    }
-
     if (!clientUserIdRef.current) {
       setScreen("setup");
       setLoading(false);
@@ -321,6 +311,8 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const steam = params.get("steam");
     const callbackUsername = params.get("username");
+    const authPopup = params.get("auth_popup") === "1";
+    const toolsReturnUrl = params.get("tools_return_url");
     if (!steam) return;
     if (callbackUsername && /^[A-Za-z0-9_]{3,24}$/.test(callbackUsername)) {
       clientUserIdRef.current = callbackUsername;
@@ -350,11 +342,57 @@ function App() {
     if (steam === "linked" || steam === "linked_no_key" || steam === "linked_sync_failed") {
       targetScreen = "accounts";
     }
+    try {
+      window.localStorage.setItem(
+        AUTH_RESULT_STORAGE_KEY,
+        JSON.stringify({
+          steam,
+          username: callbackUsername || clientUserIdRef.current || "",
+          at: Date.now()
+        })
+      );
+    } catch {
+      // ignore storage access failures
+    }
     window.history.replaceState({}, "", window.location.pathname);
     void (async () => {
       await refreshAll();
       setScreen(targetScreen);
+      if (authPopup) {
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.focus();
+          }
+        } catch {
+          // ignore opener errors
+        }
+        window.close();
+        if (toolsReturnUrl && /^https?:\/\//i.test(toolsReturnUrl)) {
+          window.location.replace(toolsReturnUrl);
+        }
+      }
     })();
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== AUTH_RESULT_STORAGE_KEY || !event.newValue) return;
+      try {
+        const parsed = JSON.parse(event.newValue);
+        const incomingUser = String(parsed?.username || "").trim();
+        if (incomingUser && /^[A-Za-z0-9_]{3,24}$/.test(incomingUser) && incomingUser !== clientUserIdRef.current) {
+          clientUserIdRef.current = incomingUser;
+          setUsername(incomingUser);
+          window.localStorage.setItem(USERNAME_STORAGE_KEY, incomingUser);
+          window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, incomingUser);
+        }
+      } catch {
+        // ignore parse failures
+      }
+      void refreshAll().then(() => setScreen("accounts"));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
   useEffect(() => {
@@ -561,13 +599,17 @@ function App() {
     const authUrl = new URL(apiUrl(path));
     authUrl.searchParams.set("client_user_id", clientUserIdRef.current);
     authUrl.searchParams.set("frontend_url", window.location.origin);
+    authUrl.searchParams.set("auth_popup", "1");
+    if (document.referrer && /^https?:\/\//i.test(document.referrer)) {
+      authUrl.searchParams.set("tools_return_url", document.referrer);
+    }
     const target = authUrl.toString();
     try {
       window.localStorage.setItem(POST_AUTH_SCREEN_STORAGE_KEY, screen);
     } catch {
       // no-op if storage is unavailable
     }
-    const opened = window.open(target, "_blank", "noopener,noreferrer");
+    const opened = window.open(target, "_blank");
     if (!opened) {
       try {
         if (window.top && window.top !== window.self) {
