@@ -90,6 +90,10 @@ function assetUrl(path?: string | null): string | null {
   return path;
 }
 
+function serializeTierState(state: TierListState) {
+  return JSON.stringify({ tiers: state.tiers, unranked: state.unranked });
+}
+
 function getThemeStorageKey(userId: string) {
   return `${THEME_STORAGE_KEY_PREFIX}${userId}`;
 }
@@ -133,6 +137,9 @@ function App() {
   const dragImageRef = useRef<HTMLElement | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
   const autoScrollRafRef = useRef<number | null>(null);
+  const tierAutosaveTimeoutRef = useRef<number | null>(null);
+  const tierStateReadyRef = useRef(false);
+  const lastSavedTierStateRef = useRef(serializeTierState(DEFAULT_TIER_STATE));
 
   function apiFetch(path: string, init: RequestInit = {}) {
     const requestUrl = new URL(apiUrl(path), window.location.origin);
@@ -218,6 +225,19 @@ function App() {
   }, [dragGameId, touchDrag]);
 
   useEffect(() => {
+    if (!dragGameId || touchDrag) return;
+    const onGlobalDragCleanup = () => endDrag();
+    window.addEventListener("drop", onGlobalDragCleanup, true);
+    window.addEventListener("dragend", onGlobalDragCleanup, true);
+    window.addEventListener("blur", onGlobalDragCleanup);
+    return () => {
+      window.removeEventListener("drop", onGlobalDragCleanup, true);
+      window.removeEventListener("dragend", onGlobalDragCleanup, true);
+      window.removeEventListener("blur", onGlobalDragCleanup);
+    };
+  }, [dragGameId, touchDrag]);
+
+  useEffect(() => {
     if (!dragGameId) return;
     const wheelOptions: AddEventListenerOptions = { passive: false };
     const onWheelWhileDragging = (event: WheelEvent) => {
@@ -257,6 +277,23 @@ function App() {
     })();
   }, []);
 
+  useEffect(() => {
+    if (!tierStateReadyRef.current) return;
+    const serialized = serializeTierState(tierState);
+    if (serialized === lastSavedTierStateRef.current) return;
+    if (tierAutosaveTimeoutRef.current) {
+      window.clearTimeout(tierAutosaveTimeoutRef.current);
+    }
+    tierAutosaveTimeoutRef.current = window.setTimeout(() => {
+      void saveTierList(tierState, true);
+    }, 260);
+    return () => {
+      if (tierAutosaveTimeoutRef.current) {
+        window.clearTimeout(tierAutosaveTimeoutRef.current);
+      }
+    };
+  }, [tierState]);
+
   async function refreshAll() {
     try {
       const bootstrapResp = await apiFetch("/api/v1/bootstrap");
@@ -264,10 +301,13 @@ function App() {
       const nextAccounts = (bootstrap?.linkedAccounts ?? []) as LinkedAccount[];
       const nextGames = ((bootstrap?.games ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null }));
       const nextTheme = bootstrap?.theme?.themeId === "light" ? "light" : "dark";
+      const nextTierState = bootstrap?.tierListState ?? DEFAULT_TIER_STATE;
 
       setLinkedAccounts(nextAccounts);
       setGames(nextGames);
-      setTierState(bootstrap?.tierListState ?? DEFAULT_TIER_STATE);
+      setTierState(nextTierState);
+      lastSavedTierStateRef.current = serializeTierState(nextTierState);
+      tierStateReadyRef.current = true;
       setThemeMode(nextTheme);
       if (nextAccounts.length > 0 || nextGames.length > 0) {
         setScreen((s) => (s === "setup" ? "accounts" : s));
@@ -279,15 +319,21 @@ function App() {
     }
   }
 
-  async function saveTierList() {
-    setStatus("Saving...");
+  async function saveTierList(stateOverride?: TierListState, silent = false) {
+    if (!silent) setStatus("Saving...");
+    const source = stateOverride ?? tierState;
     const resp = await apiFetch("/api/v1/tier-list/state", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tiers: tierState.tiers, unranked: tierState.unranked })
+      body: JSON.stringify({ tiers: source.tiers, unranked: source.unranked })
     });
-    setStatus(resp.ok ? "Saved" : "Save failed");
-    setTimeout(() => setStatus(""), 1200);
+    if (resp.ok) {
+      lastSavedTierStateRef.current = serializeTierState(source);
+    }
+    if (!silent) {
+      setStatus(resp.ok ? "Saved" : "Save failed");
+      setTimeout(() => setStatus(""), 1200);
+    }
   }
 
   async function setMode(mode: ThemeMode) {
@@ -656,6 +702,13 @@ function App() {
     dropGame(dragGameId, target, resolveDropIndex(target, fallbackIndex));
   }
 
+  function onCardDrop(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const after = e.clientX > rect.left + rect.width / 2;
+    onRowDrop(target, index + (after ? 1 : 0));
+  }
+
   return (
     <div className={`app-shell ${screen === "editor" ? "editor-focus" : ""}`}>
       <header className="app-header">
@@ -824,7 +877,7 @@ function App() {
                           onDragStart={(e) => startDrag(id, tier, idx, e)}
                           onDragEnd={endDrag}
                           onDragOver={(e) => onCardDragOver(tier, idx, e)}
-                          onDrop={() => onRowDrop(tier, idx)}
+                          onDrop={(e) => onCardDrop(tier, idx, e)}
                         >
                           {dragGameId === id && originPlaceholderActive && dragOrigin?.target === tier && dragOrigin.index === idx ? (
                             <div className="tier-origin-placeholder" />
@@ -878,7 +931,7 @@ function App() {
                         onDragStart={(e) => startDrag(id, "UNRANKED", idx, e)}
                         onDragEnd={endDrag}
                         onDragOver={(e) => onCardDragOver("UNRANKED", idx, e)}
-                        onDrop={() => onRowDrop("UNRANKED", idx)}
+                        onDrop={(e) => onCardDrop("UNRANKED", idx, e)}
                       >
                         {dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? (
                           <div className="tier-origin-placeholder" />
