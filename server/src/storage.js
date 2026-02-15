@@ -123,7 +123,7 @@ class JsonStorage {
     };
   }
 
-  async claimUsername(username) {
+  async createAccount(username, passwordSalt, passwordHash) {
     const userId = String(username || "").trim();
     const db = await readDb();
     db.users = Array.isArray(db.users) ? db.users : [];
@@ -131,20 +131,35 @@ class JsonStorage {
     if (existing) {
       return { claimed: false, error: "Username is already taken." };
     }
-    db.users.push({ id: userId, name: userId, createdAt: nowIso() });
+    db.users.push({ id: userId, name: userId, passwordSalt, passwordHash, createdAt: nowIso() });
     this.setTierState(db, userId, { tiers: { ...DEFAULT_TIERS }, unranked: [], updatedAt: null });
     this.setThemeForUser(db, userId, "dark");
     await writeDb(db);
     return { claimed: true, user: { id: userId, name: userId } };
   }
 
-  async loginUsername(username) {
+  async loginAccount(username) {
     const userId = String(username || "").trim();
     const db = await readDb();
     db.users = Array.isArray(db.users) ? db.users : [];
     const existing = db.users.find((u) => String(u.id || "").toLowerCase() === userId.toLowerCase());
     if (!existing) return null;
-    return { id: existing.id, name: existing.name || existing.id };
+    return {
+      id: existing.id,
+      name: existing.name || existing.id,
+      passwordSalt: String(existing.passwordSalt || ""),
+      passwordHash: String(existing.passwordHash || "")
+    };
+  }
+
+  async claimUsername(username) {
+    return this.createAccount(username, "", "");
+  }
+
+  async loginUsername(username) {
+    const user = await this.loginAccount(username);
+    if (!user) return null;
+    return { id: user.id, name: user.name };
   }
 
   async getLinkedAccounts(userId) {
@@ -387,6 +402,11 @@ class PgStorage {
     this.pool = new Pool({ connectionString });
   }
 
+  async ensurePasswordColumns(queryable = this.pool) {
+    await queryable.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_salt TEXT");
+    await queryable.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
+  }
+
   async ensureUserExists(userId, queryable = this.pool) {
     await queryable.query(
       `INSERT INTO users (id, name)
@@ -396,16 +416,17 @@ class PgStorage {
     );
   }
 
-  async claimUsername(username) {
+  async createAccount(username, passwordSalt, passwordHash) {
+    await this.ensurePasswordColumns();
     const userId = String(username || "").trim();
     const existing = await this.pool.query("SELECT id FROM users WHERE LOWER(id) = LOWER($1) LIMIT 1", [userId]);
     if (existing.rows[0]) {
       return { claimed: false, error: "Username is already taken." };
     }
     await this.pool.query(
-      `INSERT INTO users (id, name)
-       VALUES ($1, $2)`,
-      [userId, userId]
+      `INSERT INTO users (id, name, password_salt, password_hash)
+       VALUES ($1, $2, $3, $4)`,
+      [userId, userId, passwordSalt, passwordHash]
     );
     await this.pool.query(
       `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
@@ -422,11 +443,25 @@ class PgStorage {
     return { claimed: true, user: { id: userId, name: userId } };
   }
 
-  async loginUsername(username) {
+  async loginAccount(username) {
+    await this.ensurePasswordColumns();
     const userId = String(username || "").trim();
-    const existing = await this.pool.query("SELECT id, name FROM users WHERE LOWER(id) = LOWER($1) LIMIT 1", [userId]);
+    const existing = await this.pool.query(
+      "SELECT id, name, password_salt AS \"passwordSalt\", password_hash AS \"passwordHash\" FROM users WHERE LOWER(id) = LOWER($1) LIMIT 1",
+      [userId]
+    );
     if (!existing.rows[0]) return null;
     return existing.rows[0];
+  }
+
+  async claimUsername(username) {
+    return this.createAccount(username, "", "");
+  }
+
+  async loginUsername(username) {
+    const user = await this.loginAccount(username);
+    if (!user) return null;
+    return { id: user.id, name: user.name };
   }
 
   async bootstrap(userId) {

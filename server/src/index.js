@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nowIso } from "./db.js";
@@ -31,6 +32,26 @@ function normalizeUsername(input) {
   const username = String(input || "").trim();
   if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) return null;
   return username;
+}
+
+function normalizePassword(input) {
+  const password = String(input || "");
+  if (password.length < 6 || password.length > 128) return null;
+  return password;
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return { salt, hash };
+}
+
+function verifyPassword(password, salt, hash) {
+  if (!salt || !hash) return false;
+  const expected = Buffer.from(hash, "hex");
+  const candidate = Buffer.from(crypto.scryptSync(password, salt, 64).toString("hex"), "hex");
+  if (expected.length !== candidate.length) return false;
+  return crypto.timingSafeEqual(expected, candidate);
 }
 
 function ensureRequiredEnvForProduction() {
@@ -160,28 +181,49 @@ app.get("/api/v1/themes", (_req, res) => {
   res.json({ themes: themeCatalog, defaultThemeId: "dark" });
 });
 
-app.post("/api/v1/users/claim-username", async (req, res) => {
+app.post("/api/v1/users/create-account", async (req, res) => {
   const username = normalizeUsername(req.body?.username);
+  const password = normalizePassword(req.body?.password);
   if (!username) {
     return res.status(400).json({ error: "Username must be 3-24 chars and use letters, numbers, or _ only." });
   }
-  const result = await storage.claimUsername(username);
+  if (!password) {
+    return res.status(400).json({ error: "Password must be 6-128 characters." });
+  }
+  const { salt, hash } = hashPassword(password);
+  const result = await storage.createAccount(username, salt, hash);
   if (!result.claimed) {
     return res.status(409).json({ error: result.error || "Username is already taken." });
   }
   return res.status(201).json({ ok: true, user: result.user });
 });
 
-app.post("/api/v1/users/login-username", async (req, res) => {
+app.post("/api/v1/users/login", async (req, res) => {
   const username = normalizeUsername(req.body?.username);
+  const password = normalizePassword(req.body?.password);
   if (!username) {
     return res.status(400).json({ error: "Username must be 3-24 chars and use letters, numbers, or _ only." });
   }
-  const user = await storage.loginUsername(username);
-  if (!user) {
-    return res.status(404).json({ error: "Username not found." });
+  if (!password) {
+    return res.status(400).json({ error: "Password must be 6-128 characters." });
   }
-  return res.json({ ok: true, user });
+  const user = await storage.loginAccount(username);
+  if (!user) {
+    return res.status(404).json({ error: "Account not found." });
+  }
+  const ok = verifyPassword(password, user.passwordSalt, user.passwordHash);
+  if (!ok) {
+    return res.status(401).json({ error: "Invalid username or password." });
+  }
+  return res.json({ ok: true, user: { id: user.id, name: user.name || user.id } });
+});
+
+app.post("/api/v1/users/claim-username", async (_req, res) => {
+  return res.status(400).json({ error: "Use /api/v1/users/create-account with username + password." });
+});
+
+app.post("/api/v1/users/login-username", async (_req, res) => {
+  return res.status(400).json({ error: "Use /api/v1/users/login with username + password." });
 });
 
 app.get("/api/v1/bootstrap", async (req, res) => {

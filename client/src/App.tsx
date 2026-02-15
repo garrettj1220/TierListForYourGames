@@ -155,6 +155,7 @@ function App() {
   const [manualSteamId, setManualSteamId] = useState("");
   const [manualSteamSaving, setManualSteamSaving] = useState(false);
   const [usernameDraft, setUsernameDraft] = useState("");
+  const [passwordDraft, setPasswordDraft] = useState("");
   const [usernameSaving, setUsernameSaving] = useState(false);
   const [coverLoadFailures, setCoverLoadFailures] = useState<Record<string, true>>({});
 
@@ -609,44 +610,53 @@ function App() {
     setScreen(nextScreen);
   }
 
-  async function createUsername() {
+  async function createAccount() {
     const draft = usernameDraft.trim();
     if (!/^[A-Za-z0-9_]{3,24}$/.test(draft)) {
       setStatus("Username must be 3-24 chars and use letters, numbers, or _ only.");
       return;
     }
+    if (passwordDraft.length < 6 || passwordDraft.length > 128) {
+      setStatus("Password must be 6-128 characters.");
+      return;
+    }
     setUsernameSaving(true);
     try {
-      const resp = await fetch(apiUrl("/api/v1/users/claim-username"), {
+      const resp = await fetch(apiUrl("/api/v1/users/create-account"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: draft })
+        body: JSON.stringify({ username: draft, password: passwordDraft })
       });
       const json = await resp.json().catch(() => null);
       if (!resp.ok) {
-        setStatus(json?.error || "Could not create username.");
+        setStatus(json?.error || "Could not create account.");
         return;
       }
       await applyUsernameSession(json.user.id, "accounts");
       setStatus(`Welcome, ${json.user.id}.`);
       setUsernameDraft("");
+      setPasswordDraft("");
     } finally {
       setUsernameSaving(false);
     }
   }
 
-  async function loginUsername() {
+  async function loginAccount() {
     const draft = usernameDraft.trim();
     if (!/^[A-Za-z0-9_]{3,24}$/.test(draft)) {
       setStatus("Enter a valid username.");
       return;
     }
+    if (passwordDraft.length < 6 || passwordDraft.length > 128) {
+      setStatus("Password must be 6-128 characters.");
+      return;
+    }
     setUsernameSaving(true);
     try {
-      const resp = await fetch(apiUrl("/api/v1/users/login-username"), {
+      const resp = await fetch(apiUrl("/api/v1/users/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: draft })
+        body: JSON.stringify({ username: draft, password: passwordDraft })
       });
       const json = await resp.json().catch(() => null);
       if (!resp.ok) {
@@ -656,6 +666,7 @@ function App() {
       await applyUsernameSession(json.user.id, "stats");
       setStatus(`Signed in as ${json.user.id}.`);
       setUsernameDraft("");
+      setPasswordDraft("");
     } finally {
       setUsernameSaving(false);
     }
@@ -1088,17 +1099,25 @@ function App() {
       {screen === "setup" && (
         <section className="panel setup-panel">
           <h2>Setup</h2>
-          <p>Create a username or log in to your existing one.</p>
+          <p>Create an account or log in with your username and password.</p>
           <div className="modal-search">
             <input
               value={usernameDraft}
               onChange={(e) => setUsernameDraft(e.target.value)}
               placeholder="Username"
+              autoComplete="username"
             />
-            <button onClick={() => void createUsername()} disabled={usernameSaving}>
-              {usernameSaving ? "Working..." : "Create Username"}
+            <input
+              type="password"
+              value={passwordDraft}
+              onChange={(e) => setPasswordDraft(e.target.value)}
+              placeholder="Password"
+              autoComplete="current-password"
+            />
+            <button onClick={() => void createAccount()} disabled={usernameSaving}>
+              {usernameSaving ? "Working..." : "Create Account"}
             </button>
-            <button onClick={() => void loginUsername()} disabled={usernameSaving}>
+            <button onClick={() => void loginAccount()} disabled={usernameSaving}>
               {usernameSaving ? "Working..." : "Login"}
             </button>
           </div>
