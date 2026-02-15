@@ -363,10 +363,10 @@ body {
 
 .tier-cards-ranked {
   display: flex;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 2px;
+  flex-wrap: wrap;
+  overflow: visible;
+  padding-bottom: 0;
+  position: relative;
 }
 
 .tier-cards-unranked {
@@ -382,15 +382,29 @@ body {
 .tier-item-slot {
   flex: 0 0 clamp(86px, 8.8vw, 124px);
   min-width: 86px;
+  position: relative;
 }
 
 .tier-insert-slot {
-  width: clamp(86px, 8.8vw, 124px);
-  aspect-ratio: 264 / 374;
-  border-radius: 8px;
-  border: 2px dashed color-mix(in srgb, var(--line), #dbeafe 48%);
-  background: color-mix(in srgb, var(--panel-2), #94a3b8 28%);
-  flex: 0 0 auto;
+  position: absolute;
+  left: -6px;
+  top: 4px;
+  bottom: 4px;
+  width: 4px;
+  border-radius: 999px;
+  border: 0;
+  background: color-mix(in srgb, #60a5fa, #dbeafe 28%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, #1d4ed8, transparent 30%);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tier-insert-slot.is-end {
+  position: absolute;
+  left: auto;
+  right: -2px;
+  top: 8px;
+  bottom: 8px;
 }
 
 .tier-cards-unranked .tier-item-slot {

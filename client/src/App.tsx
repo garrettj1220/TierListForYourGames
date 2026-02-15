@@ -1235,7 +1235,7 @@ function App() {
                     );
                   })}
                   {dragGameId && dragOver?.target === tier && dragOver.index === tierState.tiers[tier].length && (
-                    <div className="tier-insert-slot" aria-hidden="true" />
+                    <div className="tier-insert-slot is-end" aria-hidden="true" />
                   )}
                 </div>
               </section>
