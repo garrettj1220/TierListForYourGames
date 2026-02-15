@@ -394,6 +394,15 @@ function App() {
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
+      if ((event.key === USERNAME_STORAGE_KEY || event.key === CLIENT_USER_STORAGE_KEY) && event.newValue) {
+        const incomingUser = String(event.newValue).trim();
+        if (incomingUser && /^[A-Za-z0-9_]{3,24}$/.test(incomingUser) && incomingUser !== clientUserIdRef.current) {
+          clientUserIdRef.current = incomingUser;
+          setUsername(incomingUser);
+          void refreshAll().then(() => setScreen("accounts"));
+        }
+        return;
+      }
       if (event.key !== AUTH_RESULT_STORAGE_KEY || !event.newValue) return;
       try {
         const parsed = JSON.parse(event.newValue);

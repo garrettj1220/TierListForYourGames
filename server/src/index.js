@@ -88,6 +88,18 @@ function safeFrontendUrl(value) {
   }
 }
 
+function safeAbsoluteUrl(value) {
+  const candidate = String(value || "").trim();
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 function resolveFrontendUrl(req) {
   const fromQuery = safeFrontendUrl(queryValue(req, "frontend_url"));
   if (fromQuery) return fromQuery;
@@ -218,7 +230,7 @@ app.get("/api/v1/accounts/steam/start", (req, res) => {
   const baseUrl = appUrl(req);
   const frontend = resolveFrontendUrl(req);
   const authPopup = queryValue(req, "auth_popup") === "1" ? "1" : "0";
-  const toolsReturnUrl = safeFrontendUrl(queryValue(req, "tools_return_url"));
+  const toolsReturnUrl = safeAbsoluteUrl(queryValue(req, "tools_return_url"));
   const returnToUrl = new URL(`${baseUrl}/api/v1/accounts/steam/callback`);
   returnToUrl.searchParams.set("client_user_id", userId);
   returnToUrl.searchParams.set("frontend_url", frontend);
@@ -241,7 +253,7 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
   if (!userId) return;
   const frontend = resolveFrontendUrl(req);
   const authPopup = readFromOpenIdReturnTo(req, "auth_popup") === "1" || queryValue(req, "auth_popup") === "1";
-  const toolsReturnUrl = safeFrontendUrl(readFromOpenIdReturnTo(req, "tools_return_url") || queryValue(req, "tools_return_url"));
+  const toolsReturnUrl = safeAbsoluteUrl(readFromOpenIdReturnTo(req, "tools_return_url") || queryValue(req, "tools_return_url"));
   const q = req.query;
   const mode = q["openid.mode"];
   const claimedId = q["openid.claimed_id"];
