@@ -161,7 +161,7 @@ function App() {
     if (steam === "linked_no_key") setStatus("Steam connected. Add STEAM_WEB_API_KEY to sync games.");
     if (steam === "linked_sync_failed") setStatus("Steam connected. Game sync failed.");
     if (steam === "failed") setStatus("Steam sign-in failed.");
-    const fallbackScreen: Screen = steam === "failed" ? "accounts" : "accounts";
+    const fallbackScreen: Screen = "accounts";
     let targetScreen: Screen = fallbackScreen;
     try {
       const stored = window.localStorage.getItem(POST_AUTH_SCREEN_STORAGE_KEY);
@@ -171,6 +171,9 @@ function App() {
       window.localStorage.removeItem(POST_AUTH_SCREEN_STORAGE_KEY);
     } catch {
       targetScreen = fallbackScreen;
+    }
+    if (steam === "linked" || steam === "linked_no_key" || steam === "linked_sync_failed") {
+      targetScreen = "accounts";
     }
     window.history.replaceState({}, "", window.location.pathname);
     void (async () => {

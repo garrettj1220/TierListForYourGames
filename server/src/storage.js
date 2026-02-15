@@ -362,9 +362,19 @@ class PgStorage {
     this.pool = new Pool({ connectionString });
   }
 
+  async ensureUserExists(userId, queryable = this.pool) {
+    await queryable.query(
+      `INSERT INTO users (id, name)
+       VALUES ($1, $2)
+       ON CONFLICT (id) DO NOTHING`,
+      [userId, "Tier List User"]
+    );
+  }
+
   async bootstrap(userId) {
     const client = await this.pool.connect();
     try {
+      await this.ensureUserExists(userId, client);
       const userResult = await client.query("SELECT id, name FROM users WHERE id = $1", [userId]);
       const accountsResult = await client.query(
         "SELECT id, platform, account_name AS \"accountName\", external_user_id AS \"externalUserId\", sync_status AS \"syncStatus\" FROM linked_accounts WHERE user_id = $1 ORDER BY linked_at DESC",
@@ -402,6 +412,7 @@ class PgStorage {
   }
 
   async getLinkedAccounts(userId) {
+    await this.ensureUserExists(userId);
     const result = await this.pool.query(
       "SELECT id, platform, account_name AS \"accountName\", external_user_id AS \"externalUserId\", sync_status AS \"syncStatus\" FROM linked_accounts WHERE user_id = $1 ORDER BY linked_at DESC",
       [userId]
@@ -410,6 +421,7 @@ class PgStorage {
   }
 
   async linkAccount(userId, { platform, accountName, externalUserId = null, metadata = {} }) {
+    await this.ensureUserExists(userId);
     if (externalUserId) {
       const existingByExternal = await this.pool.query(
         `SELECT id, platform, account_name AS "accountName", external_user_id AS "externalUserId", sync_status AS "syncStatus"
@@ -473,6 +485,7 @@ class PgStorage {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await this.ensureUserExists(userId, client);
       const accounts = await client.query("DELETE FROM linked_accounts WHERE user_id = $1", [userId]);
       const games = await client.query("DELETE FROM user_games WHERE user_id = $1", [userId]);
       await client.query(
@@ -502,6 +515,7 @@ class PgStorage {
   }
 
   async setTheme(userId, themeId) {
+    await this.ensureUserExists(userId);
     await this.pool.query(
       `INSERT INTO user_theme_settings (user_id, theme_id)
        VALUES ($1, $2)
@@ -512,6 +526,7 @@ class PgStorage {
   }
 
   async getGames(userId) {
+    await this.ensureUserExists(userId);
     const result = await this.pool.query(
       `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, ug.playtime_minutes, ug.manually_added
        FROM user_games ug
@@ -539,6 +554,7 @@ class PgStorage {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await this.ensureUserExists(userId, client);
       const sourceKey = gameInput.sourceKey || makeSourceKey(gameInput.title, gameInput.platform || "Manual");
       const coverArtUrl = gameInput.coverArtUrl || null;
       const titleMatch = await client.query(
@@ -638,6 +654,7 @@ class PgStorage {
 
   async removeGames(userId, gameIds) {
     if (gameIds.length === 0) return { removed: 0 };
+    await this.ensureUserExists(userId);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -665,6 +682,7 @@ class PgStorage {
   }
 
   async saveTierState(userId, tiers, unranked) {
+    await this.ensureUserExists(userId);
     await this.pool.query(
       `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
        VALUES ($1, $2::jsonb, $3::jsonb, NOW())
@@ -681,6 +699,7 @@ class PgStorage {
     let updated = 0;
     try {
       await client.query("BEGIN");
+      await this.ensureUserExists(userId, client);
       await client.query(
         `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
          VALUES ($1, $2::jsonb, $3::jsonb, NOW())
