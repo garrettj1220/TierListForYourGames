@@ -9,7 +9,6 @@ import { createStorage } from "./storage.js";
 
 const app = express();
 const PORT = process.env.PORT || 8787;
-const USER_ID = "demo-user";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const artDir = path.join(__dirname, "../../Art");
@@ -52,6 +51,32 @@ function frontendUrl() {
   return process.env.FRONTEND_URL || "http://localhost:5173";
 }
 
+async function clearLegacySharedWorkspace() {
+  try {
+    await storage.clearUserWorkspace("demo-user");
+  } catch (error) {
+    console.error("Failed to clear legacy demo-user workspace", error);
+  }
+}
+
+function normalizeClientUserId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(raw)) return null;
+  return raw;
+}
+
+function requireUserId(req, res) {
+  const fromHeader = req.get("x-client-user-id");
+  const fromQuery = req.query?.client_user_id;
+  const userId = normalizeClientUserId(fromHeader || fromQuery);
+  if (!userId) {
+    res.status(400).json({ error: "Missing or invalid client user id" });
+    return null;
+  }
+  return userId;
+}
+
 app.get("/", (_req, res) => {
   res.status(200).json({ ok: true, service: "tier-list-api" });
 });
@@ -73,44 +98,57 @@ app.get("/api/v1/themes", (_req, res) => {
   res.json({ themes: themeCatalog, defaultThemeId: "dark" });
 });
 
-app.get("/api/v1/bootstrap", async (_req, res) => {
-  const data = await storage.bootstrap(USER_ID);
+app.get("/api/v1/bootstrap", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const data = await storage.bootstrap(userId);
   res.json(data);
 });
 
-app.get("/api/v1/accounts", async (_req, res) => {
-  const linkedAccounts = await storage.getLinkedAccounts(USER_ID);
+app.get("/api/v1/accounts", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const linkedAccounts = await storage.getLinkedAccounts(userId);
   res.json({ linkedAccounts });
 });
 
 app.post("/api/v1/accounts/link", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
   const { platform, accountName, externalUserId = null, metadata = {} } = req.body ?? {};
   if (!platform || !accountName) {
     return res.status(400).json({ error: "platform and accountName are required" });
   }
-  const linked = await storage.linkAccount(USER_ID, { platform, accountName, externalUserId, metadata });
+  const linked = await storage.linkAccount(userId, { platform, accountName, externalUserId, metadata });
   return res.status(linked.alreadyLinked ? 200 : 201).json({ linked });
 });
 
 app.delete("/api/v1/accounts/:accountId", async (req, res) => {
-  const result = await storage.removeAccount(USER_ID, req.params.accountId);
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const result = await storage.removeAccount(userId, req.params.accountId);
   if (!result.removed) return res.status(404).json({ error: "account not found" });
   return res.json({ ok: true, ...result });
 });
 
-app.post("/api/v1/users/me/clear-all", async (_req, res) => {
-  const result = await storage.clearUserWorkspace(USER_ID);
+app.post("/api/v1/users/me/clear-all", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const result = await storage.clearUserWorkspace(userId);
   return res.json({ ok: true, ...result });
 });
 
 app.get("/api/v1/accounts/steam/start", (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
   const baseUrl = appUrl(req);
-  const returnTo = `${baseUrl}/api/v1/accounts/steam/callback`;
+  const returnToUrl = new URL(`${baseUrl}/api/v1/accounts/steam/callback`);
+  returnToUrl.searchParams.set("client_user_id", userId);
   const realm = baseUrl;
   const params = new URLSearchParams({
     "openid.ns": "http://specs.openid.net/auth/2.0",
     "openid.mode": "checkid_setup",
-    "openid.return_to": returnTo,
+    "openid.return_to": returnToUrl.toString(),
     "openid.realm": realm,
     "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
     "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select"
@@ -119,6 +157,8 @@ app.get("/api/v1/accounts/steam/start", (req, res) => {
 });
 
 app.get("/api/v1/accounts/steam/callback", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
   const q = req.query;
   const mode = q["openid.mode"];
   const claimedId = q["openid.claimed_id"];
@@ -150,7 +190,7 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
     }
 
     const personaName = await fetchSteamPersonaName(steamId).catch(() => null);
-    const linked = await storage.linkAccount(USER_ID, {
+    const linked = await storage.linkAccount(userId, {
       platform: "Steam",
       accountName: personaName || `Steam ${steamId.slice(-4)}`,
       externalUserId: steamId,
@@ -160,7 +200,7 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
     if (process.env.STEAM_WEB_API_KEY) {
       try {
         const games = await fetchSteamOwnedGames(steamId);
-        await storage.ingestSteamLibrary(USER_ID, linked.id, games);
+        await storage.ingestSteamLibrary(userId, linked.id, games);
         return res.redirect(`${frontendUrl()}/?steam=linked`);
       } catch {
         return res.redirect(`${frontendUrl()}/?steam=linked_sync_failed`);
@@ -205,7 +245,9 @@ async function fetchSteamPersonaName(steamId) {
 }
 
 app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
-  const account = await storage.getAccount(USER_ID, req.params.accountId);
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const account = await storage.getAccount(userId, req.params.accountId);
   const steamId = account?.external_user_id ?? account?.externalUserId;
   if (!account || account.platform !== "Steam" || !steamId) {
     return res.status(404).json({ error: "Steam account not found" });
@@ -213,7 +255,7 @@ app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
 
   try {
     const games = await fetchSteamOwnedGames(steamId);
-    const summary = await storage.ingestSteamLibrary(USER_ID, account.id, games);
+    const summary = await storage.ingestSteamLibrary(userId, account.id, games);
     return res.json({ ok: true, source: "steam", count: games.length, ...summary });
   } catch (error) {
     return res.status(500).json({ error: "Steam sync failed", details: String(error) });
@@ -221,13 +263,15 @@ app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
 });
 
 app.post("/api/v1/accounts/steam/manual", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
   const steamId = String(req.body?.steamId || "").trim();
   if (!steamId || !/^\d{5,20}$/.test(steamId)) {
     return res.status(400).json({ error: "A valid Steam ID is required" });
   }
 
   const personaName = await fetchSteamPersonaName(steamId).catch(() => null);
-  const linked = await storage.linkAccount(USER_ID, {
+  const linked = await storage.linkAccount(userId, {
     platform: "Steam",
     accountName: personaName || `Steam ${steamId.slice(-4)}`,
     externalUserId: steamId,
@@ -240,7 +284,7 @@ app.post("/api/v1/accounts/steam/manual", async (req, res) => {
 
   try {
     const games = await fetchSteamOwnedGames(steamId);
-    const summary = await storage.ingestSteamLibrary(USER_ID, linked.id, games);
+    const summary = await storage.ingestSteamLibrary(userId, linked.id, games);
     return res.status(201).json({ ok: true, status: "linked", linked, ...summary });
   } catch (error) {
     return res.status(502).json({
@@ -252,8 +296,10 @@ app.post("/api/v1/accounts/steam/manual", async (req, res) => {
   }
 });
 
-app.post("/api/v1/accounts/sync-all", async (_req, res) => {
-  const accounts = await storage.getLinkedAccounts(USER_ID);
+app.post("/api/v1/accounts/sync-all", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const accounts = await storage.getLinkedAccounts(userId);
   const result = {
     scanned: accounts.length,
     inserted: 0,
@@ -275,7 +321,7 @@ app.post("/api/v1/accounts/sync-all", async (_req, res) => {
     }
     try {
       const games = await fetchSteamOwnedGames(steamId);
-      const summary = await storage.ingestSteamLibrary(USER_ID, account.id, games);
+      const summary = await storage.ingestSteamLibrary(userId, account.id, games);
       result.synced += 1;
       result.inserted += Number(summary.inserted ?? 0);
       result.updated += Number(summary.updated ?? 0);
@@ -288,6 +334,8 @@ app.post("/api/v1/accounts/sync-all", async (_req, res) => {
 });
 
 app.put("/api/v1/users/me/theme", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
   const { themeId } = req.body ?? {};
   if (!themeId) {
     return res.status(400).json({ error: "themeId is required" });
@@ -296,21 +344,25 @@ app.put("/api/v1/users/me/theme", async (req, res) => {
   if (!exists) {
     return res.status(404).json({ error: "unknown themeId" });
   }
-  const theme = await storage.setTheme(USER_ID, themeId);
+  const theme = await storage.setTheme(userId, themeId);
   res.json({ ok: true, theme });
 });
 
-app.get("/api/v1/games", async (_req, res) => {
-  const games = await storage.getGames(USER_ID);
+app.get("/api/v1/games", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const games = await storage.getGames(userId);
   res.json({ games });
 });
 
 app.post("/api/v1/games/manual", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
   const { title, platform, genre, popularity = 50, coverArtUrl, sourceKey, metadata, manuallyAdded } = req.body ?? {};
   if (!title) {
     return res.status(400).json({ error: "title is required" });
   }
-  const game = await storage.addManualGame(USER_ID, {
+  const game = await storage.addManualGame(userId, {
     title,
     platform,
     genre,
@@ -324,20 +376,24 @@ app.post("/api/v1/games/manual", async (req, res) => {
 });
 
 app.post("/api/v1/games/remove", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
   const { gameIds } = req.body ?? {};
   if (!Array.isArray(gameIds)) {
     return res.status(400).json({ error: "gameIds must be an array" });
   }
-  const result = await storage.removeGames(USER_ID, gameIds);
+  const result = await storage.removeGames(userId, gameIds);
   res.json({ ok: true, ...result });
 });
 
 app.put("/api/v1/tier-list/state", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
   const { tiers, unranked } = req.body ?? {};
   if (!tiers || !unranked) {
     return res.status(400).json({ error: "tiers and unranked are required" });
   }
-  const tierListState = await storage.saveTierState(USER_ID, tiers, unranked);
+  const tierListState = await storage.saveTierState(userId, tiers, unranked);
   res.json({ ok: true, tierListState });
 });
 
@@ -456,5 +512,6 @@ app.post("/api/v1/metadata/search", async (req, res) => {
 
 app.listen(PORT, "0.0.0.0", () => {
   ensureRequiredEnvForProduction();
+  void clearLegacySharedWorkspace();
   console.log(`Tier List Your Games API listening on http://0.0.0.0:${PORT}`);
 });

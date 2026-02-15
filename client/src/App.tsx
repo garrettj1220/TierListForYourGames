@@ -60,6 +60,22 @@ const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
+const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
+
+function getOrCreateClientUserId() {
+  const fallbackId = `u_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  try {
+    const existing = window.localStorage.getItem(CLIENT_USER_STORAGE_KEY);
+    if (existing && /^[A-Za-z0-9_-]{8,80}$/.test(existing)) return existing;
+    const generated = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? `u_${crypto.randomUUID().replace(/-/g, "")}`
+      : fallbackId;
+    window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, generated);
+    return generated;
+  } catch {
+    return fallbackId;
+  }
+}
 
 function apiUrl(path: string) {
   return `${API_BASE}${path}`;
@@ -73,6 +89,7 @@ function assetUrl(path?: string | null): string | null {
 }
 
 function App() {
+  const clientUserIdRef = useRef(getOrCreateClientUserId());
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState<Screen>("setup");
   const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
@@ -98,6 +115,12 @@ function App() {
   const [searchSource, setSearchSource] = useState<"local" | "external">("local");
   const [searching, setSearching] = useState(false);
   const dragImageRef = useRef<HTMLElement | null>(null);
+
+  function apiFetch(path: string, init: RequestInit = {}) {
+    const headers = new Headers(init.headers ?? {});
+    headers.set("x-client-user-id", clientUserIdRef.current);
+    return fetch(apiUrl(path), { ...init, headers });
+  }
 
   const gameMap = useMemo(() => {
     const map = new Map<string, Game>();
@@ -142,7 +165,7 @@ function App() {
 
   async function refreshAll() {
     try {
-      const bootstrapResp = await fetch(apiUrl("/api/v1/bootstrap"));
+      const bootstrapResp = await apiFetch("/api/v1/bootstrap");
       const bootstrap = await bootstrapResp.json();
       const nextAccounts = (bootstrap?.linkedAccounts ?? []) as LinkedAccount[];
       const nextGames = ((bootstrap?.games ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null }));
@@ -164,7 +187,7 @@ function App() {
 
   async function saveTierList() {
     setStatus("Saving...");
-    const resp = await fetch(apiUrl("/api/v1/tier-list/state"), {
+    const resp = await apiFetch("/api/v1/tier-list/state", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tiers: tierState.tiers, unranked: tierState.unranked })
@@ -175,7 +198,7 @@ function App() {
 
   async function setMode(mode: ThemeMode) {
     setThemeMode(mode);
-    await fetch(apiUrl("/api/v1/users/me/theme"), {
+    await apiFetch("/api/v1/users/me/theme", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ themeId: mode })
@@ -185,7 +208,7 @@ function App() {
   async function addSteamManual() {
     if (!manualSteamId.trim()) return;
     setManualSteamSaving(true);
-    const resp = await fetch(apiUrl("/api/v1/accounts/steam/manual"), {
+    const resp = await apiFetch("/api/v1/accounts/steam/manual", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ steamId: manualSteamId.trim() })
@@ -210,21 +233,24 @@ function App() {
   }
 
   async function removeAccount(accountId: string) {
-    const resp = await fetch(apiUrl(`/api/v1/accounts/${accountId}`), { method: "DELETE" });
+    const resp = await apiFetch(`/api/v1/accounts/${accountId}`, { method: "DELETE" });
     if (!resp.ok) return;
     setLinkedAccounts((prev) => prev.filter((a) => a.id !== accountId));
   }
 
-  function openAuthInNewTab(authUrl: string) {
-    const opened = window.open(authUrl, "_blank", "noopener,noreferrer");
+  function openAuthInNewTab(path: string) {
+    const authUrl = new URL(apiUrl(path));
+    authUrl.searchParams.set("client_user_id", clientUserIdRef.current);
+    const target = authUrl.toString();
+    const opened = window.open(target, "_blank", "noopener,noreferrer");
     if (!opened) {
-      window.location.href = authUrl;
+      window.location.href = target;
     }
   }
 
   async function syncSteamAccount(accountId: string) {
     setSyncingAccountId(accountId);
-    const resp = await fetch(apiUrl(`/api/v1/accounts/steam/sync/${accountId}`), { method: "POST" });
+    const resp = await apiFetch(`/api/v1/accounts/steam/sync/${accountId}`, { method: "POST" });
     if (resp.ok) {
       await refreshAll();
       setStatus("Steam library synced.");
@@ -237,7 +263,7 @@ function App() {
 
   async function syncAllAccounts() {
     setSyncingAll(true);
-    const resp = await fetch(apiUrl("/api/v1/accounts/sync-all"), { method: "POST" });
+    const resp = await apiFetch("/api/v1/accounts/sync-all", { method: "POST" });
     if (resp.ok) {
       const json = await resp.json();
       await refreshAll();
@@ -253,7 +279,7 @@ function App() {
     if (searchQuery.trim().length < 2) return;
     setSearching(true);
     setSearchSource("local");
-    const resp = await fetch(apiUrl("/api/v1/metadata/search/local"), {
+    const resp = await apiFetch("/api/v1/metadata/search/local", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: searchQuery.trim() })
@@ -269,7 +295,7 @@ function App() {
     if (searchQuery.trim().length < 2) return;
     setSearching(true);
     setSearchSource("external");
-    const resp = await fetch(apiUrl("/api/v1/metadata/search/external"), {
+    const resp = await apiFetch("/api/v1/metadata/search/external", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: searchQuery.trim() })
@@ -282,7 +308,7 @@ function App() {
   }
 
   async function addGame(result: SearchResult) {
-    const resp = await fetch(apiUrl("/api/v1/games/manual"), {
+    const resp = await apiFetch("/api/v1/games/manual", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -306,7 +332,7 @@ function App() {
   }
 
   async function removeGame(gameId: string) {
-    const resp = await fetch(apiUrl("/api/v1/games/remove"), {
+    const resp = await apiFetch("/api/v1/games/remove", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ gameIds: [gameId] })
@@ -330,7 +356,7 @@ function App() {
   async function clearAllWorkspace() {
     const confirmed = window.confirm("Are you sure? This will remove all linked accounts and all games for your user.");
     if (!confirmed) return;
-    const resp = await fetch(apiUrl("/api/v1/users/me/clear-all"), { method: "POST" });
+    const resp = await apiFetch("/api/v1/users/me/clear-all", { method: "POST" });
     if (!resp.ok) {
       setStatus("Clear all failed.");
       return;
@@ -581,7 +607,7 @@ function App() {
                 <p>{accountCounts[platform] ? `${accountCounts[platform]} connected` : "Not connected"}</p>
                 {platform === "Steam" ? (
                   <div className="platform-actions">
-                    <button onClick={() => openAuthInNewTab(apiUrl("/api/v1/accounts/steam/start"))}>Connect</button>
+                    <button onClick={() => openAuthInNewTab("/api/v1/accounts/steam/start")}>Connect</button>
                     <button onClick={() => setSteamManualOpen(true)}>Add Manually</button>
                   </div>
                 ) : (
