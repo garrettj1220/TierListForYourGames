@@ -60,6 +60,7 @@ const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
   .replace(/\/$/, "");
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
+const DRAG_EDGE_HYSTERESIS_PX = 10;
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
 const USERNAME_STORAGE_KEY = "tierlist_username";
@@ -885,7 +886,16 @@ function App() {
       }
       const index = Number(cardEl.dataset.index || 0);
       const rect = cardEl.getBoundingClientRect();
-      const after = x > rect.left + rect.width / 2;
+      const midpoint = rect.left + rect.width / 2;
+      const distanceToMid = Math.abs(x - midpoint);
+      if (
+        distanceToMid <= DRAG_EDGE_HYSTERESIS_PX &&
+        dragOver?.target === target &&
+        (dragOver.index === index || dragOver.index === index + 1)
+      ) {
+        return { target, index: dragOver.index };
+      }
+      const after = x > midpoint;
       return { target, index: index + (after ? 1 : 0) };
     }
     const rowEl = node?.closest<HTMLElement>("[data-drop-row='true']");
@@ -964,6 +974,17 @@ function App() {
     e.dataTransfer.dropEffect = "move";
     dragPointerYRef.current = e.clientY;
     const ids = idsForTarget(target);
+    if (target !== "UNRANKED" && ids.length > 0) {
+      const row = e.currentTarget;
+      const cards = row.querySelectorAll<HTMLElement>("[data-drop-card='true']");
+      const lastCard = cards.item(cards.length - 1);
+      if (lastCard) {
+        const lastRect = lastCard.getBoundingClientRect();
+        if (e.clientX < lastRect.right - DRAG_EDGE_HYSTERESIS_PX) {
+          return;
+        }
+      }
+    }
     setDragOver({ target, index: ids.length });
   }
 
@@ -981,7 +1002,16 @@ function App() {
     e.dataTransfer.dropEffect = "move";
     dragPointerYRef.current = e.clientY;
     const rect = e.currentTarget.getBoundingClientRect();
-    const after = e.clientX > rect.left + rect.width / 2;
+    const midpoint = rect.left + rect.width / 2;
+    const distanceToMid = Math.abs(e.clientX - midpoint);
+    if (
+      distanceToMid <= DRAG_EDGE_HYSTERESIS_PX &&
+      dragOver?.target === target &&
+      (dragOver.index === index || dragOver.index === index + 1)
+    ) {
+      return;
+    }
+    const after = e.clientX > midpoint;
     setDragOver({ target, index: index + (after ? 1 : 0) });
   }
 
