@@ -873,6 +873,10 @@ function App() {
     const cardEl = node?.closest<HTMLElement>("[data-drop-card='true']");
     if (cardEl) {
       const target = cardEl.dataset.target as DropTarget;
+      if (target === "UNRANKED") {
+        const rowEl = cardEl.closest<HTMLElement>("[data-drop-row='true']");
+        return { target, index: Number(rowEl?.dataset.count || 0) };
+      }
       const index = Number(cardEl.dataset.index || 0);
       const rect = cardEl.getBoundingClientRect();
       const after = x > rect.left + rect.width / 2;
@@ -912,14 +916,7 @@ function App() {
 
   function resolveDropIndex(target: DropTarget, fallbackIndex?: number) {
     const ids = idsForTarget(target);
-    if (
-      target === "UNRANKED" &&
-      dragOrigin?.target === "UNRANKED" &&
-      typeof fallbackIndex !== "number" &&
-      (!dragOver || (dragOver.target === "UNRANKED" && dragOver.index >= ids.length))
-    ) {
-      return Math.min(dragOrigin.index, Math.max(ids.length - 1, 0));
-    }
+    if (target === "UNRANKED") return ids.length;
     if (dragOver?.target === target) return dragOver.index;
     if (typeof fallbackIndex === "number") return fallbackIndex;
     return ids.length;
@@ -965,6 +962,7 @@ function App() {
   }
 
   function onCardDragOver(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
+    if (target === "UNRANKED") return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     dragPointerYRef.current = e.clientY;
@@ -981,6 +979,7 @@ function App() {
   }
 
   function onCardDrop(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
+    if (target === "UNRANKED") return;
     e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
     const after = e.clientX > rect.left + rect.width / 2;
@@ -1175,9 +1174,7 @@ function App() {
                           onDragOver={(e) => onCardDragOver(tier, idx, e)}
                           onDrop={(e) => onCardDrop(tier, idx, e)}
                         >
-                          {dragGameId === id && originPlaceholderActive && dragOrigin?.target === tier && dragOrigin.index === idx ? (
-                            <div className="tier-origin-placeholder" />
-                          ) : game.coverArtUrl ? (
+                          {game.coverArtUrl ? (
                               <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
                           ) : (
                             <div className="cover-fallback cover-fallback-tier">{game.title}</div>
@@ -1211,9 +1208,6 @@ function App() {
                   if (!game) return null;
                   return (
                     <div key={id} className="tier-item-slot">
-                      {dragGameId && dragOver?.target === "UNRANKED" && dragOver.index === idx && (
-                        <div className="tier-insert-slot" aria-hidden="true" />
-                      )}
                       <article
                         className={`tier-game ${dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? "is-origin-placeholder" : ""}`}
                         data-drop-card="true"
@@ -1229,9 +1223,7 @@ function App() {
                         onDragOver={(e) => onCardDragOver("UNRANKED", idx, e)}
                         onDrop={(e) => onCardDrop("UNRANKED", idx, e)}
                       >
-                        {dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? (
-                          <div className="tier-origin-placeholder" />
-                        ) : game.coverArtUrl ? (
+                        {game.coverArtUrl ? (
                             <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
                         ) : (
                           <div className="cover-fallback cover-fallback-tier">{game.title}</div>
@@ -1241,9 +1233,6 @@ function App() {
                     </div>
                   );
                 })}
-                {dragGameId && dragOver?.target === "UNRANKED" && dragOver.index === tierState.unranked.length && (
-                  <div className="tier-insert-slot" aria-hidden="true" />
-                )}
               </div>
             </section>
           </div>
