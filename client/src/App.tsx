@@ -768,17 +768,20 @@ function App() {
     }));
   }
 
-  async function clearAllWorkspace() {
-    const confirmed = window.confirm("Are you sure? This will remove all linked accounts and all games for your user.");
+  function clearTierList() {
+    const confirmed = window.confirm("Reset all ranked games back to Unranked?");
     if (!confirmed) return;
-    const resp = await apiFetch("/api/v1/users/me/clear-all", { method: "POST" });
-    if (!resp.ok) {
-      setStatus("Clear all failed.");
-      return;
-    }
-    await refreshAll();
-    setScreen("setup");
-    setStatus("Workspace reset. Start setup again.");
+    setTierState((prev) => {
+      const ranked = TIER_KEYS.flatMap((tier) => prev.tiers[tier]);
+      const unranked = Array.from(new Set([...prev.unranked, ...ranked]));
+      return {
+        ...prev,
+        tiers: { S: [], A: [], B: [], C: [], D: [], F: [] },
+        unranked
+      };
+    });
+    setStatus("Tier list reset to Unranked.");
+    window.setTimeout(() => setStatus(""), 1200);
   }
 
   function dropGame(gameId: string, target: DropTarget, insertIndex?: number) {
@@ -842,7 +845,6 @@ function App() {
   if (loading) return <div className="app-shell loading">Loading...</div>;
 
   function startTouchDrag(gameId: string, target: DropTarget, index: number, e: React.PointerEvent<HTMLElement>) {
-    if (e.pointerType !== "touch") return;
     if (e.button !== 0) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setDragGameId(gameId);
@@ -901,8 +903,20 @@ function App() {
     const rowEl = node?.closest<HTMLElement>("[data-drop-row='true']");
     if (rowEl) {
       const target = rowEl.dataset.target as DropTarget;
-      const index = Number(rowEl.dataset.count || 0);
-      return { target, index };
+      if (target === "UNRANKED") {
+        const index = Number(rowEl.dataset.count || 0);
+        return { target, index };
+      }
+      const cardEls = Array.from(rowEl.querySelectorAll<HTMLElement>("[data-drop-card='true']"));
+      for (let i = 0; i < cardEls.length; i += 1) {
+        const rect = cardEls[i].getBoundingClientRect();
+        if (y < rect.top) return { target, index: i };
+        if (y <= rect.bottom) {
+          const midpoint = rect.left + rect.width / 2;
+          return { target, index: x < midpoint ? i : i + 1 };
+        }
+      }
+      return { target, index: cardEls.length };
     }
     return null;
   }
@@ -926,116 +940,6 @@ function App() {
     endDrag();
   }
 
-  function idsForTarget(target: DropTarget) {
-    return target === "UNRANKED" ? tierState.unranked : tierState.tiers[target];
-  }
-
-  function resolveDropIndex(target: DropTarget, fallbackIndex?: number) {
-    const ids = idsForTarget(target);
-    if (target === "UNRANKED") return ids.length;
-    if (dragOver?.target === target) return dragOver.index;
-    if (typeof fallbackIndex === "number") return fallbackIndex;
-    return ids.length;
-  }
-
-  function startDrag(gameId: string, target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
-    setDragGameId(gameId);
-    setDragOrigin({ target, index });
-    setDragOver({ target, index });
-    setOriginPlaceholderActive(false);
-    dragPointerYRef.current = null;
-
-    const sourceEl = e.currentTarget;
-    const clone = sourceEl.cloneNode(true) as HTMLElement;
-    const rect = sourceEl.getBoundingClientRect();
-    clone.style.position = "fixed";
-    clone.style.top = "-10000px";
-    clone.style.left = "-10000px";
-    clone.style.width = `${Math.round(rect.width)}px`;
-    clone.style.height = `${Math.round(rect.height)}px`;
-    clone.style.margin = "0";
-    clone.style.pointerEvents = "none";
-    clone.style.transform = "none";
-    clone.classList.remove("is-origin-placeholder");
-    document.body.appendChild(clone);
-    dragImageRef.current = clone;
-
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", gameId);
-    e.dataTransfer.setDragImage(clone, rect.width / 2, rect.height / 2);
-
-    window.requestAnimationFrame(() => {
-      setOriginPlaceholderActive(true);
-    });
-  }
-
-  function onRowDragOver(target: DropTarget, e: React.DragEvent<HTMLElement>) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    dragPointerYRef.current = e.clientY;
-    const ids = idsForTarget(target);
-    if (target !== "UNRANKED" && ids.length > 0) {
-      const row = e.currentTarget;
-      const cards = row.querySelectorAll<HTMLElement>("[data-drop-card='true']");
-      const lastCard = cards.item(cards.length - 1);
-      if (lastCard) {
-        const lastRect = lastCard.getBoundingClientRect();
-        if (e.clientX < lastRect.right - DRAG_EDGE_HYSTERESIS_PX) {
-          return;
-        }
-      }
-    }
-    setDragOver({ target, index: ids.length });
-  }
-
-  function onCardDragOver(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
-    if (target === "UNRANKED") {
-      e.stopPropagation();
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      dragPointerYRef.current = e.clientY;
-      setDragOver({ target, index: tierState.unranked.length });
-      return;
-    }
-    e.stopPropagation();
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    dragPointerYRef.current = e.clientY;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const midpoint = rect.left + rect.width / 2;
-    const distanceToMid = Math.abs(e.clientX - midpoint);
-    if (
-      distanceToMid <= DRAG_EDGE_HYSTERESIS_PX &&
-      dragOver?.target === target &&
-      (dragOver.index === index || dragOver.index === index + 1)
-    ) {
-      return;
-    }
-    const after = e.clientX > midpoint;
-    setDragOver({ target, index: index + (after ? 1 : 0) });
-  }
-
-  function onRowDrop(target: DropTarget, e: React.DragEvent<HTMLElement>, fallbackIndex?: number) {
-    e.preventDefault();
-    const gameId = dragGameId || e.dataTransfer.getData("text/plain");
-    if (!gameId) return;
-    dropGame(gameId, target, resolveDropIndex(target, fallbackIndex));
-  }
-
-  function onCardDrop(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
-    if (target === "UNRANKED") {
-      e.stopPropagation();
-      e.preventDefault();
-      onRowDrop(target, e);
-      return;
-    }
-    e.stopPropagation();
-    e.preventDefault();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const after = e.clientX > rect.left + rect.width / 2;
-    onRowDrop(target, e, index + (after ? 1 : 0));
-  }
-
   return (
     <div className={`app-shell ${screen === "editor" ? "editor-focus" : ""}`}>
       <header className="app-header">
@@ -1050,7 +954,6 @@ function App() {
             {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
           </button>
           <button onClick={() => void exportPdf()}>Export PDF</button>
-          <button className="danger" onClick={() => void clearAllWorkspace()}>Clear All</button>
         </div>
       </header>
 
@@ -1184,7 +1087,10 @@ function App() {
         <section className="panel">
           <div className="row-between">
             <h2>Tier List</h2>
-            <button onClick={() => void saveTierList()}>Save</button>
+            <div className="header-actions">
+              <button onClick={() => void saveTierList()}>Save</button>
+              <button className="danger" onClick={clearTierList}>Clear Tier List</button>
+            </div>
           </div>
           <div className="tier-wrap">
             {TIER_KEYS.map((tier) => (
@@ -1194,8 +1100,6 @@ function App() {
                 data-target={tier}
                 data-count={tierState.tiers[tier].length}
                 className={`tier-row tier-${tier}${dropFlashTarget === tier ? " tier-drop-flash" : ""}`}
-                onDragOver={(e) => onRowDragOver(tier, e)}
-                onDrop={(e) => onRowDrop(tier, e)}
               >
                 <header>
                   <span className="tier-label">{tier}</span>
@@ -1214,15 +1118,10 @@ function App() {
                           data-drop-card="true"
                           data-target={tier}
                           data-index={idx}
-                          draggable
                           onPointerDown={(e) => startTouchDrag(id, tier, idx, e)}
                           onPointerMove={onTouchPointerMove}
                           onPointerUp={onTouchPointerUp}
                           onPointerCancel={onTouchPointerUp}
-                          onDragStart={(e) => startDrag(id, tier, idx, e)}
-                          onDragEnd={endDrag}
-                          onDragOver={(e) => onCardDragOver(tier, idx, e)}
-                          onDrop={(e) => onCardDrop(tier, idx, e)}
                         >
                           {game.coverArtUrl ? (
                               <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
@@ -1246,8 +1145,6 @@ function App() {
               data-target="UNRANKED"
               data-count={tierState.unranked.length}
               className={`tier-row tier-pool${dropFlashTarget === "UNRANKED" ? " tier-drop-flash" : ""}`}
-              onDragOver={(e) => onRowDragOver("UNRANKED", e)}
-              onDrop={(e) => onRowDrop("UNRANKED", e)}
             >
               <header>
                 <span className="tier-label">Unranked</span>
@@ -1263,15 +1160,10 @@ function App() {
                         data-drop-card="true"
                         data-target="UNRANKED"
                         data-index={idx}
-                        draggable
                         onPointerDown={(e) => startTouchDrag(id, "UNRANKED", idx, e)}
                         onPointerMove={onTouchPointerMove}
                         onPointerUp={onTouchPointerUp}
                         onPointerCancel={onTouchPointerUp}
-                        onDragStart={(e) => startDrag(id, "UNRANKED", idx, e)}
-                        onDragEnd={endDrag}
-                        onDragOver={(e) => onCardDragOver("UNRANKED", idx, e)}
-                        onDrop={(e) => onCardDrop("UNRANKED", idx, e)}
                       >
                         {game.coverArtUrl ? (
                             <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
@@ -1335,7 +1227,7 @@ function App() {
         </div>
       )}
 
-      {touchDrag && touchDrag.pointerType === "touch" && dragGameId && gameMap.get(dragGameId) && (
+      {touchDrag && dragGameId && gameMap.get(dragGameId) && (
         <div
           className="touch-drag-ghost"
           style={{
