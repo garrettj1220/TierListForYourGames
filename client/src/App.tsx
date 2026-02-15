@@ -123,6 +123,16 @@ function readLocalWorkspace(userId: string) {
   }
 }
 
+function normalizeConnection(row: Record<string, unknown>): LinkedAccount {
+  return {
+    id: String(row.id || row.connectionId || ""),
+    platform: String(row.platform || row.provider || "Unknown"),
+    accountName: String(row.accountName || row.account_name || row.displayName || row.external_username || "Connected"),
+    externalUserId: row.externalUserId ? String(row.externalUserId) : row.external_user_id ? String(row.external_user_id) : undefined,
+    syncStatus: row.syncStatus ? String(row.syncStatus) : row.sync_status ? String(row.sync_status) : undefined
+  };
+}
+
 function App() {
   const initialClientUserId = readStoredUsername();
   const [username, setUsername] = useState(initialClientUserId);
@@ -433,7 +443,7 @@ function App() {
 
   async function refreshAll() {
     try {
-      const bootstrapResp = await apiFetch("/api/v1/bootstrap");
+      const bootstrapResp = await apiFetch("/api/tierlist/bootstrap");
       if (bootstrapResp.status === 401) {
         setAuthMissing(true);
         setUsername("");
@@ -450,10 +460,15 @@ function App() {
       }
       const bootstrap = await bootstrapResp.json();
       const nextUsername = String(bootstrap?.user?.username || bootstrap?.user?.name || bootstrap?.user?.id || "").trim();
-      const nextAccounts = (bootstrap?.linkedAccounts ?? []) as LinkedAccount[];
       const nextGames = ((bootstrap?.games ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null }));
       const nextTheme = bootstrap?.theme?.themeId === "light" ? "light" : "dark";
       const nextTierState = bootstrap?.tierListState ?? DEFAULT_TIER_STATE;
+      const connectionsResp = await apiFetch("/api/accounts/connections");
+      const connectionsJson = connectionsResp.ok ? await connectionsResp.json().catch(() => null) : null;
+      const rawConnections = Array.isArray(connectionsJson?.connections)
+        ? (connectionsJson.connections as Record<string, unknown>[])
+        : [];
+      const nextAccounts = rawConnections.map(normalizeConnection).filter((a) => a.id);
 
       setAuthMissing(false);
       if (nextUsername) {
@@ -474,7 +489,7 @@ function App() {
   async function saveTierList(stateOverride?: TierListState, silent = false) {
     if (!silent) setStatus("Saving...");
     const source = stateOverride ?? tierState;
-    const resp = await apiFetch("/api/v1/tier-list/state", {
+    const resp = await apiFetch("/api/tierlist/tier-list/state", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tiers: source.tiers, unranked: source.unranked })
@@ -489,8 +504,7 @@ function App() {
   }
 
   function goToStudioLogin() {
-    const next = encodeURIComponent(window.location.href);
-    window.location.href = `${STUDIO_WEB_BASE}/login?next=${next}`;
+    window.location.href = `/account?mode=login&next=${encodeURIComponent("/tierlist")}`;
   }
 
   function logoutUsername() {
@@ -500,7 +514,7 @@ function App() {
 
   async function setMode(mode: ThemeMode) {
     setThemeMode(mode);
-    await apiFetch("/api/v1/users/me/theme", {
+    await apiFetch("/api/tierlist/users/me/theme", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ themeId: mode })
@@ -514,7 +528,7 @@ function App() {
     }
     setManualSteamSaving(true);
     try {
-      const resp = await apiFetch("/api/v1/accounts/steam/manual", {
+      const resp = await apiFetch("/api/accounts/steam/manual", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ steamId: manualSteamId.trim() })
@@ -543,24 +557,45 @@ function App() {
   }
 
   async function removeAccount(accountId: string) {
-    const resp = await apiFetch(`/api/v1/accounts/${accountId}`, { method: "DELETE" });
+    const resp = await apiFetch(`/api/accounts/connections/${accountId}`, { method: "DELETE" });
     if (!resp.ok) return;
     setLinkedAccounts((prev) => prev.filter((a) => a.id !== accountId));
   }
 
-  function openAuthInNewTab(path: string) {
+  async function openAuthInNewTab() {
     if (!hasUsername) {
       setScreen("setup");
       setStatus("U do not have an account with us.");
       return;
     }
-    const authUrl = new URL(apiUrl(path));
-    authUrl.searchParams.set("frontend_url", window.location.origin);
-    authUrl.searchParams.set("auth_popup", "1");
-    if (document.referrer && /^https?:\/\//i.test(document.referrer)) {
-      authUrl.searchParams.set("tools_return_url", document.referrer);
+    const resp = await apiFetch("/api/accounts/steam/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        frontend_url: window.location.origin,
+        auth_popup: 1,
+        tools_return_url: document.referrer && /^https?:\/\//i.test(document.referrer) ? document.referrer : undefined
+      })
+    });
+    if (!resp.ok) {
+      const error = await resp.json().catch(() => null);
+      setStatus(error?.error || "Could not start Steam connect.");
+      return;
     }
-    const target = authUrl.toString();
+    let target = "";
+    try {
+      const json = await resp.clone().json();
+      target = String(json?.url || json?.authUrl || "");
+    } catch {
+      // no-op
+    }
+    if (!target) {
+      target = resp.url;
+    }
+    if (!target) {
+      setStatus("Could not start Steam connect.");
+      return;
+    }
     const opened = window.open(target, "_blank");
     if (!opened) {
       try {
@@ -577,7 +612,7 @@ function App() {
 
   async function syncSteamAccount(accountId: string) {
     setSyncingAccountId(accountId);
-    const resp = await apiFetch(`/api/v1/accounts/steam/sync/${accountId}`, { method: "POST" });
+    const resp = await apiFetch(`/api/accounts/steam/sync/${accountId}`, { method: "POST" });
     if (resp.ok) {
       await refreshAll();
       setStatus("Steam library synced.");
@@ -590,15 +625,14 @@ function App() {
 
   async function syncAllAccounts() {
     setSyncingAll(true);
-    const resp = await apiFetch("/api/v1/accounts/sync-all", { method: "POST" });
-    if (resp.ok) {
-      const json = await resp.json();
-      await refreshAll();
-      setStatus(`Scan complete: ${json.inserted} new, ${json.updated} updated.`);
-    } else {
-      const error = await resp.json().catch(() => null);
-      setStatus(error?.error || "Scan failed.");
+    const steamConnections = linkedAccounts.filter((a) => String(a.platform).toLowerCase() === "steam");
+    let synced = 0;
+    for (const connection of steamConnections) {
+      const resp = await apiFetch(`/api/accounts/steam/sync/${connection.id}`, { method: "POST" });
+      if (resp.ok) synced += 1;
     }
+    await refreshAll();
+    setStatus(`Scan complete: synced ${synced}/${steamConnections.length} Steam connections.`);
     setSyncingAll(false);
   }
 
@@ -608,7 +642,7 @@ function App() {
       return;
     }
     setSearching(true);
-    const resp = await apiFetch("/api/v1/metadata/search/external", {
+    const resp = await apiFetch("/api/tierlist/metadata/search/external", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: searchQuery.trim() })
@@ -621,7 +655,7 @@ function App() {
   }
 
   async function addGame(result: SearchResult) {
-    const resp = await apiFetch("/api/v1/games/manual", {
+    const resp = await apiFetch("/api/tierlist/games/manual", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -645,7 +679,7 @@ function App() {
   }
 
   async function removeGame(gameId: string) {
-    const resp = await apiFetch("/api/v1/games/remove", {
+    const resp = await apiFetch("/api/tierlist/games/remove", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ gameIds: [gameId] })
@@ -928,7 +962,7 @@ function App() {
                 <p>{accountCounts[platform] ? `${accountCounts[platform]} connected` : "Not connected"}</p>
                 {platform === "Steam" ? (
                   <div className="platform-actions">
-                    <button onClick={() => openAuthInNewTab("/api/v1/accounts/steam/start")}>Connect</button>
+                    <button onClick={() => void openAuthInNewTab()}>Connect</button>
                     <button onClick={() => setSteamManualOpen(true)}>Add Manually</button>
                   </div>
                 ) : (

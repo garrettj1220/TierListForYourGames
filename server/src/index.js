@@ -155,11 +155,11 @@ app.get("/api/v1/health", (_req, res) => {
   });
 });
 
-app.get("/api/v1/themes", (_req, res) => {
+app.get("/api/tierlist/themes", (_req, res) => {
   res.json({ themes: themeCatalog, defaultThemeId: "dark" });
 });
 
-app.get("/api/v1/auth/me", async (req, res) => {
+app.get("/api/tierlist/auth/me", async (req, res) => {
   const authUser = await fetchStudioAuthUser(req);
   if (!authUser) {
     return res.status(401).json({ error: "Authentication required." });
@@ -175,7 +175,7 @@ app.get("/api/v1/auth/me", async (req, res) => {
   });
 });
 
-app.get("/api/v1/bootstrap", async (req, res) => {
+app.get("/api/tierlist/bootstrap", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const data = await storage.bootstrap(authUser.userId);
@@ -191,15 +191,15 @@ app.get("/api/v1/bootstrap", async (req, res) => {
   });
 });
 
-app.get("/api/v1/accounts", async (req, res) => {
+app.get("/api/accounts/connections", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
   const linkedAccounts = await storage.getLinkedAccounts(userId);
-  res.json({ linkedAccounts });
+  res.json({ connections: linkedAccounts });
 });
 
-app.post("/api/v1/accounts/link", async (req, res) => {
+app.post("/api/accounts/connections", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -211,16 +211,16 @@ app.post("/api/v1/accounts/link", async (req, res) => {
   return res.status(linked.alreadyLinked ? 200 : 201).json({ linked });
 });
 
-app.delete("/api/v1/accounts/:accountId", async (req, res) => {
+app.delete("/api/accounts/connections/:connectionId", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
-  const result = await storage.removeAccount(userId, req.params.accountId);
+  const result = await storage.removeAccount(userId, req.params.connectionId);
   if (!result.removed) return res.status(404).json({ error: "account not found" });
   return res.json({ ok: true, ...result });
 });
 
-app.post("/api/v1/users/me/clear-all", async (req, res) => {
+app.post("/api/tierlist/users/me/clear-all", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -228,14 +228,12 @@ app.post("/api/v1/users/me/clear-all", async (req, res) => {
   return res.json({ ok: true, ...result });
 });
 
-app.get("/api/v1/accounts/steam/start", async (req, res) => {
-  const authUser = await requireAuthenticatedUser(req, res);
-  if (!authUser) return;
+function buildSteamStartUrl(req) {
   const baseUrl = appUrl(req);
-  const frontend = resolveFrontendUrl(req);
-  const authPopup = queryValue(req, "auth_popup") === "1" ? "1" : "0";
-  const toolsReturnUrl = safeAbsoluteUrl(queryValue(req, "tools_return_url"));
-  const returnToUrl = new URL(`${baseUrl}/api/v1/accounts/steam/callback`);
+  const frontend = safeFrontendUrl(req.body?.frontend_url) || resolveFrontendUrl(req);
+  const authPopup = String(req.body?.auth_popup ?? queryValue(req, "auth_popup") ?? "0") === "1" ? "1" : "0";
+  const toolsReturnUrl = safeAbsoluteUrl(req.body?.tools_return_url || queryValue(req, "tools_return_url"));
+  const returnToUrl = new URL(`${baseUrl}/api/accounts/steam/callback`);
   returnToUrl.searchParams.set("frontend_url", frontend);
   if (authPopup === "1") returnToUrl.searchParams.set("auth_popup", "1");
   if (toolsReturnUrl) returnToUrl.searchParams.set("tools_return_url", toolsReturnUrl);
@@ -248,10 +246,22 @@ app.get("/api/v1/accounts/steam/start", async (req, res) => {
     "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
     "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select"
   });
-  res.redirect(`https://steamcommunity.com/openid/login?${params.toString()}`);
+  return `https://steamcommunity.com/openid/login?${params.toString()}`;
+}
+
+app.get("/api/accounts/steam/start", async (req, res) => {
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  res.redirect(buildSteamStartUrl(req));
 });
 
-app.get("/api/v1/accounts/steam/callback", async (req, res) => {
+app.post("/api/accounts/steam/start", async (req, res) => {
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  return res.json({ ok: true, url: buildSteamStartUrl(req) });
+});
+
+app.get("/api/accounts/steam/callback", async (req, res) => {
   const authUser = await fetchStudioAuthUser(req);
   const userId = authUser?.userId || "";
   const frontend = resolveFrontendUrl(req);
@@ -376,11 +386,11 @@ async function fetchSteamPersonaName(steamId) {
   return json?.response?.players?.[0]?.personaname ?? null;
 }
 
-app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
+app.post("/api/accounts/steam/sync/:connectionId", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
-  const account = await storage.getAccount(userId, req.params.accountId);
+  const account = await storage.getAccount(userId, req.params.connectionId);
   const steamId = account?.external_user_id ?? account?.externalUserId;
   if (!account || account.platform !== "Steam" || !steamId) {
     return res.status(404).json({ error: "Steam account not found" });
@@ -395,7 +405,7 @@ app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
   }
 });
 
-app.post("/api/v1/accounts/steam/manual", async (req, res) => {
+app.post("/api/accounts/steam/manual", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -430,7 +440,7 @@ app.post("/api/v1/accounts/steam/manual", async (req, res) => {
   }
 });
 
-app.post("/api/v1/accounts/sync-all", async (req, res) => {
+app.post("/api/accounts/sync-all", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -468,7 +478,7 @@ app.post("/api/v1/accounts/sync-all", async (req, res) => {
   return res.json({ ok: true, ...result });
 });
 
-app.put("/api/v1/users/me/theme", async (req, res) => {
+app.put("/api/tierlist/users/me/theme", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -484,7 +494,7 @@ app.put("/api/v1/users/me/theme", async (req, res) => {
   res.json({ ok: true, theme });
 });
 
-app.get("/api/v1/games", async (req, res) => {
+app.get("/api/tierlist/games", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -492,7 +502,7 @@ app.get("/api/v1/games", async (req, res) => {
   res.json({ games });
 });
 
-app.post("/api/v1/games/manual", async (req, res) => {
+app.post("/api/tierlist/games/manual", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -513,7 +523,7 @@ app.post("/api/v1/games/manual", async (req, res) => {
   res.status(201).json({ game });
 });
 
-app.post("/api/v1/games/remove", async (req, res) => {
+app.post("/api/tierlist/games/remove", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -525,7 +535,7 @@ app.post("/api/v1/games/remove", async (req, res) => {
   res.json({ ok: true, ...result });
 });
 
-app.put("/api/v1/tier-list/state", async (req, res) => {
+app.put("/api/tierlist/tier-list/state", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
   const userId = authUser.userId;
@@ -611,7 +621,7 @@ async function getIgdbAccessToken(clientId, clientSecret) {
   return accessToken;
 }
 
-app.post("/api/v1/metadata/search/local", async (req, res) => {
+app.post("/api/tierlist/metadata/search/local", async (req, res) => {
   const { query } = req.body ?? {};
   if (!query || String(query).trim().length < 2) {
     return res.status(400).json({ error: "query must be at least 2 characters" });
@@ -620,7 +630,7 @@ app.post("/api/v1/metadata/search/local", async (req, res) => {
   return res.json({ source: "local", results });
 });
 
-app.post("/api/v1/metadata/search/external", async (req, res) => {
+app.post("/api/tierlist/metadata/search/external", async (req, res) => {
   const { query } = req.body ?? {};
   if (!query || String(query).trim().length < 2) {
     return res.status(400).json({ error: "query must be at least 2 characters" });
@@ -633,7 +643,7 @@ app.post("/api/v1/metadata/search/external", async (req, res) => {
   }
 });
 
-app.post("/api/v1/metadata/search", async (req, res) => {
+app.post("/api/tierlist/metadata/search", async (req, res) => {
   const { query, mode = "local" } = req.body ?? {};
   if (!query || String(query).trim().length < 2) {
     return res.status(400).json({ error: "query must be at least 2 characters" });
