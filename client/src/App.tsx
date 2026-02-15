@@ -66,6 +66,7 @@ const POST_AUTH_SCREEN_STORAGE_KEY = "tierlist_post_auth_screen";
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
 const USER_DATA_STORAGE_KEY_PREFIX = "tierlist_user_data_";
 const AUTH_RESULT_STORAGE_KEY = "tierlist_auth_result";
+const AUTH_MESSAGE_TYPE = "tierlist-auth-complete";
 
 function readStoredUsername() {
   try {
@@ -361,6 +362,20 @@ function App() {
       if (authPopup) {
         try {
           if (window.opener && !window.opener.closed) {
+            window.opener.postMessage(
+              {
+                type: AUTH_MESSAGE_TYPE,
+                steam,
+                username: callbackUsername || clientUserIdRef.current || ""
+              },
+              "*"
+            );
+          }
+        } catch {
+          // ignore opener errors
+        }
+        try {
+          if (window.opener && !window.opener.closed) {
             window.opener.focus();
           }
         } catch {
@@ -369,6 +384,8 @@ function App() {
         window.close();
         if (toolsReturnUrl && /^https?:\/\//i.test(toolsReturnUrl)) {
           window.location.replace(toolsReturnUrl);
+        } else {
+          window.location.replace("/tools");
         }
       }
     })();
@@ -393,6 +410,27 @@ function App() {
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const payload = event.data;
+      if (!payload || payload.type !== AUTH_MESSAGE_TYPE) return;
+      const incomingUser = String(payload.username || "").trim();
+      if (incomingUser && /^[A-Za-z0-9_]{3,24}$/.test(incomingUser)) {
+        clientUserIdRef.current = incomingUser;
+        setUsername(incomingUser);
+        try {
+          window.localStorage.setItem(USERNAME_STORAGE_KEY, incomingUser);
+          window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, incomingUser);
+        } catch {
+          // ignore storage failures
+        }
+      }
+      void refreshAll().then(() => setScreen("accounts"));
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
   }, []);
 
   useEffect(() => {
@@ -596,6 +634,11 @@ function App() {
   }
 
   function openAuthInNewTab(path: string) {
+    if (!hasUsername || !clientUserIdRef.current) {
+      setScreen("setup");
+      setStatus("Create or log in with a username before connecting Steam.");
+      return;
+    }
     const authUrl = new URL(apiUrl(path));
     authUrl.searchParams.set("client_user_id", clientUserIdRef.current);
     authUrl.searchParams.set("frontend_url", window.location.origin);

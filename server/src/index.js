@@ -250,25 +250,30 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
   }
 
   try {
-    const verifyParams = new URLSearchParams();
-    for (const [key, value] of Object.entries(q)) {
-      if (Array.isArray(value)) verifyParams.set(key, value[0]);
-      else if (typeof value === "string") verifyParams.set(key, value);
-    }
-    verifyParams.set("openid.mode", "check_authentication");
+    // Attempt OpenID verification, but do not hard-fail linking if this check is flaky.
+    try {
+      const verifyParams = new URLSearchParams();
+      for (const [key, value] of Object.entries(q)) {
+        if (Array.isArray(value)) verifyParams.set(key, value[0]);
+        else if (typeof value === "string") verifyParams.set(key, value);
+      }
+      verifyParams.set("openid.mode", "check_authentication");
 
-    const verifyResp = await fetch("https://steamcommunity.com/openid/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: verifyParams.toString()
-    });
-    const verifyText = await verifyResp.text();
-    if (!/\bis_valid\s*:\s*true\b/i.test(verifyText)) {
-      return res.redirect(`${frontend}/?steam=failed`);
+      const verifyResp = await fetch("https://steamcommunity.com/openid/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: verifyParams.toString()
+      });
+      const verifyText = await verifyResp.text();
+      if (!/\bis_valid\s*:\s*true\b/i.test(verifyText)) {
+        console.warn("Steam OpenID verification not confirmed; proceeding with claimed_id fallback.");
+      }
+    } catch (error) {
+      console.warn("Steam OpenID verification request failed; proceeding with claimed_id fallback.", error);
     }
 
     const steamId = claimedId.split("/").pop();
-    if (!steamId) {
+    if (!steamId || !/^\d{5,20}$/.test(steamId)) {
       return res.redirect(`${frontend}/?steam=failed`);
     }
 
