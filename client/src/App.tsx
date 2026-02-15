@@ -61,6 +61,7 @@ const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
+const POST_AUTH_SCREEN_STORAGE_KEY = "tierlist_post_auth_screen";
 
 function getOrCreateClientUserId() {
   const fallbackId = `u_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
@@ -112,7 +113,6 @@ function App() {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searchSource, setSearchSource] = useState<"local" | "external">("local");
   const [searching, setSearching] = useState(false);
   const dragImageRef = useRef<HTMLElement | null>(null);
 
@@ -161,8 +161,22 @@ function App() {
     if (steam === "linked_no_key") setStatus("Steam connected. Add STEAM_WEB_API_KEY to sync games.");
     if (steam === "linked_sync_failed") setStatus("Steam connected. Game sync failed.");
     if (steam === "failed") setStatus("Steam sign-in failed.");
+    const fallbackScreen: Screen = steam === "failed" ? "accounts" : "accounts";
+    let targetScreen: Screen = fallbackScreen;
+    try {
+      const stored = window.localStorage.getItem(POST_AUTH_SCREEN_STORAGE_KEY);
+      if (stored === "setup" || stored === "accounts" || stored === "games" || stored === "editor") {
+        targetScreen = stored;
+      }
+      window.localStorage.removeItem(POST_AUTH_SCREEN_STORAGE_KEY);
+    } catch {
+      targetScreen = fallbackScreen;
+    }
     window.history.replaceState({}, "", window.location.pathname);
-    void refreshAll();
+    void (async () => {
+      await refreshAll();
+      setScreen(targetScreen);
+    })();
   }, []);
 
   async function refreshAll() {
@@ -208,30 +222,38 @@ function App() {
   }
 
   async function addSteamManual() {
-    if (!manualSteamId.trim()) return;
-    setManualSteamSaving(true);
-    const resp = await apiFetch("/api/v1/accounts/steam/manual", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ steamId: manualSteamId.trim() })
-    });
-    const json = await resp.json().catch(() => null);
-    if (!resp.ok) {
-      setStatus(json?.error || "Could not add Steam account.");
-      setManualSteamSaving(false);
+    if (!manualSteamId.trim()) {
+      setStatus("Enter your SteamID64 first.");
       return;
     }
-    await refreshAll();
-    if (json?.status === "linked_no_key") {
-      setStatus("Steam linked. Add STEAM_WEB_API_KEY to sync games.");
-    } else if (json?.status === "sync_failed") {
-      setStatus("Steam linked, but sync failed. Ensure games list is public.");
-    } else {
-      setStatus("Steam account linked.");
+    setManualSteamSaving(true);
+    try {
+      const resp = await apiFetch("/api/v1/accounts/steam/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ steamId: manualSteamId.trim() })
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        setStatus(json?.error || "Could not add Steam account.");
+        setManualSteamSaving(false);
+        return;
+      }
+      await refreshAll();
+      if (json?.status === "linked_no_key") {
+        setStatus("Steam linked. Add STEAM_WEB_API_KEY to sync games.");
+      } else if (json?.status === "sync_failed") {
+        setStatus("Steam linked, but sync failed. Ensure games list is public.");
+      } else {
+        setStatus("Steam account linked.");
+      }
+      setManualSteamId("");
+      setSteamManualOpen(false);
+    } catch {
+      setStatus("Could not add Steam account.");
+    } finally {
+      setManualSteamSaving(false);
     }
-    setManualSteamId("");
-    setSteamManualOpen(false);
-    setManualSteamSaving(false);
   }
 
   async function removeAccount(accountId: string) {
@@ -243,7 +265,13 @@ function App() {
   function openAuthInNewTab(path: string) {
     const authUrl = new URL(apiUrl(path));
     authUrl.searchParams.set("client_user_id", clientUserIdRef.current);
+    authUrl.searchParams.set("frontend_url", window.location.origin);
     const target = authUrl.toString();
+    try {
+      window.localStorage.setItem(POST_AUTH_SCREEN_STORAGE_KEY, screen);
+    } catch {
+      // no-op if storage is unavailable
+    }
     const opened = window.open(target, "_blank", "noopener,noreferrer");
     if (!opened) {
       window.location.href = target;
@@ -277,26 +305,12 @@ function App() {
     setSyncingAll(false);
   }
 
-  async function searchLocal() {
-    if (searchQuery.trim().length < 2) return;
+  async function searchGames() {
+    if (searchQuery.trim().length < 2) {
+      setStatus("Search needs at least 2 characters.");
+      return;
+    }
     setSearching(true);
-    setSearchSource("local");
-    const resp = await apiFetch("/api/v1/metadata/search/local", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: searchQuery.trim() })
-    });
-    const json = await resp.json().catch(() => ({ results: [] }));
-    const results = (json.results ?? []).map((g: SearchResult) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl || "") }));
-    setSearchResults(results);
-    if (results.length === 0) setStatus("No local matches. Try Expand Search.");
-    setSearching(false);
-  }
-
-  async function searchExternal() {
-    if (searchQuery.trim().length < 2) return;
-    setSearching(true);
-    setSearchSource("external");
     const resp = await apiFetch("/api/v1/metadata/search/external", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -804,11 +818,8 @@ function App() {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search title"
               />
-              <button onClick={() => void searchLocal()} disabled={searching}>{searching ? "Searching..." : "Search"}</button>
+              <button onClick={() => void searchGames()} disabled={searching}>{searching ? "Searching..." : "Search"}</button>
             </div>
-            {searchSource === "local" && searchResults.length === 0 && searchQuery.trim().length >= 2 && !searching && (
-              <button onClick={() => void searchExternal()}>Expand Search</button>
-            )}
             <div className="search-results">
               {searchResults.map((r) => (
                 <article key={`${r.sourceKey || r.title}-${r.platform}`} className="search-item">

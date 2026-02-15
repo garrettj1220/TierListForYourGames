@@ -54,14 +54,71 @@ export function createStorage() {
 }
 
 class JsonStorage {
+  ensureUserScopedState(db) {
+    if (!db.tierListStates || typeof db.tierListStates !== "object" || Array.isArray(db.tierListStates)) {
+      db.tierListStates = {};
+      if (db.tierListState && typeof db.tierListState === "object") {
+        const legacyUserId = String(db.tierListState.userId || "demo-user");
+        db.tierListStates[legacyUserId] = {
+          userId: legacyUserId,
+          tiers: db.tierListState.tiers || DEFAULT_TIERS,
+          unranked: db.tierListState.unranked || [],
+          updatedAt: db.tierListState.updatedAt || null
+        };
+      }
+    }
+    if (!db.userThemeSettingsByUser || typeof db.userThemeSettingsByUser !== "object" || Array.isArray(db.userThemeSettingsByUser)) {
+      db.userThemeSettingsByUser = {};
+      if (db.userThemeSettings && typeof db.userThemeSettings === "object") {
+        const legacyUserId = String(db.userThemeSettings.userId || "demo-user");
+        db.userThemeSettingsByUser[legacyUserId] = {
+          userId: legacyUserId,
+          themeId: db.userThemeSettings.themeId || "dark"
+        };
+      }
+    }
+  }
+
+  getTierState(db, userId) {
+    this.ensureUserScopedState(db);
+    return (
+      db.tierListStates[userId] || {
+        userId,
+        tiers: { ...DEFAULT_TIERS },
+        unranked: [],
+        updatedAt: null
+      }
+    );
+  }
+
+  setTierState(db, userId, state) {
+    this.ensureUserScopedState(db);
+    db.tierListStates[userId] = {
+      userId,
+      tiers: state.tiers,
+      unranked: state.unranked,
+      updatedAt: state.updatedAt ?? null
+    };
+  }
+
+  getTheme(db, userId) {
+    this.ensureUserScopedState(db);
+    return db.userThemeSettingsByUser[userId] || { userId, themeId: "dark" };
+  }
+
+  setThemeForUser(db, userId, themeId) {
+    this.ensureUserScopedState(db);
+    db.userThemeSettingsByUser[userId] = { userId, themeId };
+  }
+
   async bootstrap(userId) {
     const db = await readDb();
     return {
       user: db.users.find((u) => u.id === userId) || { id: userId, name: "Demo User" },
       linkedAccounts: db.linkedAccounts.filter((a) => a.userId === userId),
       games: db.userGames.filter((g) => g.userId === userId),
-      tierListState: db.tierListState ?? { userId, tiers: DEFAULT_TIERS, unranked: [], updatedAt: null },
-      theme: db.userThemeSettings ?? { userId, themeId: "light" }
+      tierListState: this.getTierState(db, userId),
+      theme: this.getTheme(db, userId)
     };
   }
 
@@ -129,17 +186,17 @@ class JsonStorage {
     const gamesRemoved = db.userGames.filter((g) => g.userId === userId).length;
     db.linkedAccounts = db.linkedAccounts.filter((a) => a.userId !== userId);
     db.userGames = db.userGames.filter((g) => g.userId !== userId);
-    db.tierListState = { userId, tiers: DEFAULT_TIERS, unranked: [], updatedAt: null };
-    db.userThemeSettings = { userId, themeId: "dark" };
+    this.setTierState(db, userId, { tiers: { ...DEFAULT_TIERS }, unranked: [], updatedAt: null });
+    this.setThemeForUser(db, userId, "dark");
     await writeDb(db);
     return { accountsRemoved, gamesRemoved };
   }
 
   async setTheme(userId, themeId) {
     const db = await readDb();
-    db.userThemeSettings = { userId, themeId };
+    this.setThemeForUser(db, userId, themeId);
     await writeDb(db);
-    return db.userThemeSettings;
+    return { userId, themeId };
   }
 
   async getGames(userId) {
@@ -167,6 +224,7 @@ class JsonStorage {
   async addManualGame(userId, gameInput) {
     const db = await readDb();
     db.gamesNormalized = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
+    const tierState = this.getTierState(db, userId);
     const sourceKey = gameInput.sourceKey || makeSourceKey(gameInput.title, gameInput.platform || "Manual");
     const coverArtUrl = gameInput.coverArtUrl || null;
 
@@ -209,35 +267,39 @@ class JsonStorage {
       });
     }
 
-    db.tierListState.unranked = Array.from(new Set([...(db.tierListState.unranked ?? []), catalogGame.id]));
-    db.tierListState.updatedAt = nowIso();
+    tierState.unranked = Array.from(new Set([...(tierState.unranked ?? []), catalogGame.id]));
+    tierState.updatedAt = nowIso();
+    this.setTierState(db, userId, tierState);
     await writeDb(db);
     return db.userGames.find((g) => g.userId === userId && g.id === catalogGame.id);
   }
 
   async removeGames(userId, gameIds) {
     const db = await readDb();
+    const tierState = this.getTierState(db, userId);
     const removeSet = new Set(gameIds);
     db.userGames = db.userGames.filter((g) => !(g.userId === userId && removeSet.has(g.id)));
-    db.tierListState.unranked = (db.tierListState.unranked ?? []).filter((id) => !removeSet.has(id));
-    for (const tier of Object.keys(db.tierListState.tiers)) {
-      db.tierListState.tiers[tier] = db.tierListState.tiers[tier].filter((id) => !removeSet.has(id));
+    tierState.unranked = (tierState.unranked ?? []).filter((id) => !removeSet.has(id));
+    for (const tier of Object.keys(tierState.tiers || {})) {
+      tierState.tiers[tier] = tierState.tiers[tier].filter((id) => !removeSet.has(id));
     }
-    db.tierListState.updatedAt = nowIso();
+    tierState.updatedAt = nowIso();
+    this.setTierState(db, userId, tierState);
     await writeDb(db);
     return { removed: gameIds.length };
   }
 
   async saveTierState(userId, tiers, unranked) {
     const db = await readDb();
-    db.tierListState = { userId, tiers, unranked, updatedAt: nowIso() };
+    this.setTierState(db, userId, { tiers, unranked, updatedAt: nowIso() });
     await writeDb(db);
-    return db.tierListState;
+    return this.getTierState(db, userId);
   }
 
   async ingestSteamLibrary(userId, _accountId, ownedGames) {
     const db = await readDb();
     db.gamesNormalized = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
+    const tierState = this.getTierState(db, userId);
     let inserted = 0;
     let updated = 0;
     for (const raw of ownedGames) {
@@ -286,9 +348,10 @@ class JsonStorage {
           createdAt: nowIso()
         });
       }
-      db.tierListState.unranked = Array.from(new Set([...(db.tierListState.unranked ?? []), catalogGame.id]));
+      tierState.unranked = Array.from(new Set([...(tierState.unranked ?? []), catalogGame.id]));
     }
-    db.tierListState.updatedAt = nowIso();
+    tierState.updatedAt = nowIso();
+    this.setTierState(db, userId, tierState);
     await writeDb(db);
     return { inserted, updated };
   }

@@ -51,6 +51,29 @@ function frontendUrl() {
   return process.env.FRONTEND_URL || "http://localhost:5173";
 }
 
+function safeFrontendUrl(value) {
+  const candidate = String(value || "").trim();
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    parsed.hash = "";
+    parsed.pathname = "";
+    parsed.search = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function resolveFrontendUrl(req) {
+  const fromQuery = safeFrontendUrl(req.query?.frontend_url);
+  if (fromQuery) return fromQuery;
+  const fromEnv = safeFrontendUrl(process.env.FRONTEND_URL);
+  if (fromEnv) return fromEnv;
+  return frontendUrl();
+}
+
 async function clearLegacySharedWorkspace() {
   try {
     await storage.clearUserWorkspace("demo-user");
@@ -142,8 +165,10 @@ app.get("/api/v1/accounts/steam/start", (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const baseUrl = appUrl(req);
+  const frontend = resolveFrontendUrl(req);
   const returnToUrl = new URL(`${baseUrl}/api/v1/accounts/steam/callback`);
   returnToUrl.searchParams.set("client_user_id", userId);
+  returnToUrl.searchParams.set("frontend_url", frontend);
   const realm = baseUrl;
   const params = new URLSearchParams({
     "openid.ns": "http://specs.openid.net/auth/2.0",
@@ -159,11 +184,12 @@ app.get("/api/v1/accounts/steam/start", (req, res) => {
 app.get("/api/v1/accounts/steam/callback", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
+  const frontend = resolveFrontendUrl(req);
   const q = req.query;
   const mode = q["openid.mode"];
   const claimedId = q["openid.claimed_id"];
   if (mode !== "id_res" || typeof claimedId !== "string") {
-    return res.redirect(`${frontendUrl()}/?steam=failed`);
+    return res.redirect(`${frontend}/?steam=failed`);
   }
 
   try {
@@ -181,12 +207,12 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
     });
     const verifyText = await verifyResp.text();
     if (!verifyText.includes("is_valid:true")) {
-      return res.redirect(`${frontendUrl()}/?steam=failed`);
+      return res.redirect(`${frontend}/?steam=failed`);
     }
 
     const steamId = claimedId.split("/").pop();
     if (!steamId) {
-      return res.redirect(`${frontendUrl()}/?steam=failed`);
+      return res.redirect(`${frontend}/?steam=failed`);
     }
 
     const personaName = await fetchSteamPersonaName(steamId).catch(() => null);
@@ -201,17 +227,27 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
       try {
         const games = await fetchSteamOwnedGames(steamId);
         await storage.ingestSteamLibrary(userId, linked.id, games);
-        return res.redirect(`${frontendUrl()}/?steam=linked`);
+        return res.redirect(`${frontend}/?steam=linked`);
       } catch {
-        return res.redirect(`${frontendUrl()}/?steam=linked_sync_failed`);
+        return res.redirect(`${frontend}/?steam=linked_sync_failed`);
       }
     }
 
-    return res.redirect(`${frontendUrl()}/?steam=linked_no_key`);
+    return res.redirect(`${frontend}/?steam=linked_no_key`);
   } catch {
-    return res.redirect(`${frontendUrl()}/?steam=failed`);
+    return res.redirect(`${frontend}/?steam=failed`);
   }
 });
+
+function parseSteamId(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  if (/^\d{5,20}$/.test(raw)) return raw;
+  const urlMatch = raw.match(/steamcommunity\.com\/profiles\/(\d{5,20})/i);
+  if (urlMatch?.[1]) return urlMatch[1];
+  const trailingDigits = raw.match(/(\d{5,20})$/);
+  return trailingDigits?.[1] || null;
+}
 
 async function fetchSteamOwnedGames(steamId) {
   const steamApiKey = process.env.STEAM_WEB_API_KEY;
@@ -265,9 +301,9 @@ app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
 app.post("/api/v1/accounts/steam/manual", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  const steamId = String(req.body?.steamId || "").trim();
-  if (!steamId || !/^\d{5,20}$/.test(steamId)) {
-    return res.status(400).json({ error: "A valid Steam ID is required" });
+  const steamId = parseSteamId(req.body?.steamId);
+  if (!steamId) {
+    return res.status(400).json({ error: "Enter a valid SteamID64 or profile URL with numeric Steam ID." });
   }
 
   const personaName = await fetchSteamPersonaName(steamId).catch(() => null);

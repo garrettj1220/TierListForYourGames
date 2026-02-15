@@ -314,6 +314,17 @@ body {
   border-bottom-color: color-mix(in srgb, #93c5fd, var(--line) 55%);
 }
 
+:root[data-theme="light"] .tier-label {
+  color: #0b1220;
+  border-bottom-color: color-mix(in srgb, #0b1220, var(--line) 72%);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+:root[data-theme="light"] .tier-pool .tier-label {
+  color: #111827;
+  border-bottom-color: color-mix(in srgb, #111827, var(--line) 74%);
+}
+
 .tier-S {
   background: color-mix(in srgb, #f59e0b, var(--panel) 74%);
 }
