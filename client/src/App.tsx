@@ -63,6 +63,7 @@ const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
 const POST_AUTH_SCREEN_STORAGE_KEY = "tierlist_post_auth_screen";
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
+const USER_DATA_STORAGE_KEY_PREFIX = "tierlist_user_data_";
 
 function getOrCreateClientUserId() {
   const fallbackId = `u_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
@@ -94,6 +95,10 @@ function serializeTierState(state: TierListState) {
   return JSON.stringify({ tiers: state.tiers, unranked: state.unranked });
 }
 
+function getUserDataStorageKey(userId: string) {
+  return `${USER_DATA_STORAGE_KEY_PREFIX}${userId}`;
+}
+
 function getThemeStorageKey(userId: string) {
   return `${THEME_STORAGE_KEY_PREFIX}${userId}`;
 }
@@ -106,6 +111,23 @@ function readStoredTheme(userId: string): ThemeMode {
     // ignore storage access failures
   }
   return "dark";
+}
+
+function readLocalWorkspace(userId: string) {
+  try {
+    const raw = window.localStorage.getItem(getUserDataStorageKey(userId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      linkedAccounts: Array.isArray(parsed.linkedAccounts) ? (parsed.linkedAccounts as LinkedAccount[]) : [],
+      games: Array.isArray(parsed.games) ? (parsed.games as Game[]) : [],
+      tierState: parsed.tierState && typeof parsed.tierState === "object" ? (parsed.tierState as TierListState) : DEFAULT_TIER_STATE,
+      themeMode: parsed.themeMode === "light" || parsed.themeMode === "dark" ? (parsed.themeMode as ThemeMode) : "dark"
+    };
+  } catch {
+    return null;
+  }
 }
 
 function App() {
@@ -140,6 +162,7 @@ function App() {
   const tierAutosaveTimeoutRef = useRef<number | null>(null);
   const tierStateReadyRef = useRef(false);
   const lastSavedTierStateRef = useRef(serializeTierState(DEFAULT_TIER_STATE));
+  const workspaceHydratedRef = useRef(false);
 
   function apiFetch(path: string, init: RequestInit = {}) {
     const requestUrl = new URL(apiUrl(path), window.location.origin);
@@ -165,6 +188,20 @@ function App() {
   const hasSetup = linkedAccounts.length > 0 || games.length > 0;
 
   useEffect(() => {
+    const local = readLocalWorkspace(clientUserIdRef.current);
+    if (local) {
+      setLinkedAccounts(local.linkedAccounts);
+      setGames(local.games.map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null })));
+      setTierState(local.tierState ?? DEFAULT_TIER_STATE);
+      setThemeMode(local.themeMode ?? "dark");
+      lastSavedTierStateRef.current = serializeTierState(local.tierState ?? DEFAULT_TIER_STATE);
+      tierStateReadyRef.current = true;
+      setLoading(false);
+      if (local.linkedAccounts.length > 0 || local.games.length > 0) {
+        setScreen("accounts");
+      }
+    }
+    workspaceHydratedRef.current = true;
     void refreshAll();
   }, []);
 
@@ -176,6 +213,24 @@ function App() {
       // ignore storage access failures
     }
   }, [themeMode]);
+
+  useEffect(() => {
+    if (!workspaceHydratedRef.current || loading) return;
+    try {
+      window.localStorage.setItem(
+        getUserDataStorageKey(clientUserIdRef.current),
+        JSON.stringify({
+          linkedAccounts,
+          games,
+          tierState,
+          themeMode,
+          updatedAt: Date.now()
+        })
+      );
+    } catch {
+      // ignore storage access failures
+    }
+  }, [linkedAccounts, games, tierState, themeMode, loading]);
 
   useEffect(() => {
     if (!dropFlashTarget) return;
@@ -861,7 +916,7 @@ function App() {
                     if (!game) return null;
                     return (
                       <div key={id} className="tier-item-slot">
-                        {dragGameId && dragOver?.target === tier && dragOver.index === idx && dragGameId !== id && (
+                        {dragGameId && dragOver?.target === tier && dragOver.index === idx && (
                           <div className="tier-insert-slot" aria-hidden="true" />
                         )}
                         <article
@@ -915,7 +970,7 @@ function App() {
                   if (!game) return null;
                   return (
                     <div key={id} className="tier-item-slot">
-                      {dragGameId && dragOver?.target === "UNRANKED" && dragOver.index === idx && dragGameId !== id && (
+                      {dragGameId && dragOver?.target === "UNRANKED" && dragOver.index === idx && (
                         <div className="tier-insert-slot" aria-hidden="true" />
                       )}
                       <article
