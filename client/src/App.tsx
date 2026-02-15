@@ -1210,11 +1210,11 @@ function App() {
                           )}
                           <article
                             className={`tier-game${isOriginDragging ? " is-origin-placeholder" : ""}`}
-                            data-drop-card="true"
-                            data-target={tier}
-                            data-index={idx}
-                            onPointerDown={(e) => startTouchDrag(id, tier, idx, e)}
-                            onPointerMove={onTouchPointerMove}
+                            data-drop-card={isOriginDragging ? undefined : "true"}
+                            data-target={isOriginDragging ? undefined : tier}
+                            data-index={isOriginDragging ? undefined : idx}
+                            onPointerDown={isOriginDragging ? undefined : (e) => startTouchDrag(id, tier, idx, e)}
+                            onPointerMove={isOriginDragging ? undefined : onTouchPointerMove}
                           >
                             {game.coverArtUrl ? (
                                 <img
@@ -1262,11 +1262,11 @@ function App() {
                     <div key={id} className={`tier-item-slot${isOriginDragging ? " is-drag-origin" : ""}`}>
                       <article
                         className={`tier-game${isOriginDragging ? " is-origin-placeholder" : ""}`}
-                        data-drop-card="true"
-                        data-target="UNRANKED"
-                        data-index={idx}
-                        onPointerDown={(e) => startTouchDrag(id, "UNRANKED", idx, e)}
-                        onPointerMove={onTouchPointerMove}
+                        data-drop-card={isOriginDragging ? undefined : "true"}
+                        data-target={isOriginDragging ? undefined : "UNRANKED"}
+                        data-index={isOriginDragging ? undefined : idx}
+                        onPointerDown={isOriginDragging ? undefined : (e) => startTouchDrag(id, "UNRANKED", idx, e)}
+                        onPointerMove={isOriginDragging ? undefined : onTouchPointerMove}
                       >
                         {game.coverArtUrl ? (
                             <img
