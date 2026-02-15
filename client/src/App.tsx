@@ -287,12 +287,11 @@ function App() {
   useEffect(() => {
     if (!dragGameId || touchDrag) return;
     const onGlobalDragCleanup = () => endDrag();
-    window.addEventListener("drop", onGlobalDragCleanup, true);
-    window.addEventListener("dragend", onGlobalDragCleanup, true);
+    // Let React drop handlers run first; dragend/blur are enough for cleanup.
+    window.addEventListener("dragend", onGlobalDragCleanup);
     window.addEventListener("blur", onGlobalDragCleanup);
     return () => {
-      window.removeEventListener("drop", onGlobalDragCleanup, true);
-      window.removeEventListener("dragend", onGlobalDragCleanup, true);
+      window.removeEventListener("dragend", onGlobalDragCleanup);
       window.removeEventListener("blur", onGlobalDragCleanup);
     };
   }, [dragGameId, touchDrag]);
@@ -1174,7 +1173,7 @@ function App() {
                           {dragGameId === id && originPlaceholderActive && dragOrigin?.target === tier && dragOrigin.index === idx ? (
                             <div className="tier-origin-placeholder" />
                           ) : game.coverArtUrl ? (
-                            <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
+                              <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
                           ) : (
                             <div className="cover-fallback cover-fallback-tier">{game.title}</div>
                           )}
@@ -1228,7 +1227,7 @@ function App() {
                         {dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx ? (
                           <div className="tier-origin-placeholder" />
                         ) : game.coverArtUrl ? (
-                          <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} />
+                            <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
                         ) : (
                           <div className="cover-fallback cover-fallback-tier">{game.title}</div>
                         )}
