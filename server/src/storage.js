@@ -113,6 +113,7 @@ class JsonStorage {
 
   async bootstrap(userId) {
     const db = await readDb();
+    db.users = Array.isArray(db.users) ? db.users : [];
     return {
       user: db.users.find((u) => u.id === userId) || { id: userId, name: "Demo User" },
       linkedAccounts: db.linkedAccounts.filter((a) => a.userId === userId),
@@ -120,6 +121,30 @@ class JsonStorage {
       tierListState: this.getTierState(db, userId),
       theme: this.getTheme(db, userId)
     };
+  }
+
+  async claimUsername(username) {
+    const userId = String(username || "").trim();
+    const db = await readDb();
+    db.users = Array.isArray(db.users) ? db.users : [];
+    const existing = db.users.find((u) => String(u.id || "").toLowerCase() === userId.toLowerCase());
+    if (existing) {
+      return { claimed: false, error: "Username is already taken." };
+    }
+    db.users.push({ id: userId, name: userId, createdAt: nowIso() });
+    this.setTierState(db, userId, { tiers: { ...DEFAULT_TIERS }, unranked: [], updatedAt: null });
+    this.setThemeForUser(db, userId, "dark");
+    await writeDb(db);
+    return { claimed: true, user: { id: userId, name: userId } };
+  }
+
+  async loginUsername(username) {
+    const userId = String(username || "").trim();
+    const db = await readDb();
+    db.users = Array.isArray(db.users) ? db.users : [];
+    const existing = db.users.find((u) => String(u.id || "").toLowerCase() === userId.toLowerCase());
+    if (!existing) return null;
+    return { id: existing.id, name: existing.name || existing.id };
   }
 
   async getLinkedAccounts(userId) {
@@ -369,6 +394,39 @@ class PgStorage {
        ON CONFLICT (id) DO NOTHING`,
       [userId, "Tier List User"]
     );
+  }
+
+  async claimUsername(username) {
+    const userId = String(username || "").trim();
+    const existing = await this.pool.query("SELECT id FROM users WHERE LOWER(id) = LOWER($1) LIMIT 1", [userId]);
+    if (existing.rows[0]) {
+      return { claimed: false, error: "Username is already taken." };
+    }
+    await this.pool.query(
+      `INSERT INTO users (id, name)
+       VALUES ($1, $2)`,
+      [userId, userId]
+    );
+    await this.pool.query(
+      `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
+       VALUES ($1, $2::jsonb, $3::jsonb, NULL)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [userId, JSON.stringify(DEFAULT_TIERS), JSON.stringify([])]
+    );
+    await this.pool.query(
+      `INSERT INTO user_theme_settings (user_id, theme_id)
+       VALUES ($1, 'dark')
+       ON CONFLICT (user_id) DO NOTHING`,
+      [userId]
+    );
+    return { claimed: true, user: { id: userId, name: userId } };
+  }
+
+  async loginUsername(username) {
+    const userId = String(username || "").trim();
+    const existing = await this.pool.query("SELECT id, name FROM users WHERE LOWER(id) = LOWER($1) LIMIT 1", [userId]);
+    if (!existing.rows[0]) return null;
+    return existing.rows[0];
   }
 
   async bootstrap(userId) {

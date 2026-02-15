@@ -27,6 +27,12 @@ function hasEnv(name) {
   return Boolean(String(process.env[name] || "").trim());
 }
 
+function normalizeUsername(input) {
+  const username = String(input || "").trim();
+  if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) return null;
+  return username;
+}
+
 function ensureRequiredEnvForProduction() {
   if (process.env.NODE_ENV !== "production") return;
   const missing = [];
@@ -140,6 +146,30 @@ app.get("/api/v1/health", (_req, res) => {
 
 app.get("/api/v1/themes", (_req, res) => {
   res.json({ themes: themeCatalog, defaultThemeId: "dark" });
+});
+
+app.post("/api/v1/users/claim-username", async (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  if (!username) {
+    return res.status(400).json({ error: "Username must be 3-24 chars and use letters, numbers, or _ only." });
+  }
+  const result = await storage.claimUsername(username);
+  if (!result.claimed) {
+    return res.status(409).json({ error: result.error || "Username is already taken." });
+  }
+  return res.status(201).json({ ok: true, user: result.user });
+});
+
+app.post("/api/v1/users/login-username", async (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  if (!username) {
+    return res.status(400).json({ error: "Username must be 3-24 chars and use letters, numbers, or _ only." });
+  }
+  const user = await storage.loginUsername(username);
+  if (!user) {
+    return res.status(404).json({ error: "Username not found." });
+  }
+  return res.json({ ok: true, user });
 });
 
 app.get("/api/v1/bootstrap", async (req, res) => {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
-type Screen = "setup" | "accounts" | "games" | "editor";
+type Screen = "setup" | "stats" | "accounts" | "games" | "editor";
 type TierKey = "S" | "A" | "B" | "C" | "D" | "F";
 type ThemeMode = "dark" | "light";
 type DropTarget = TierKey | "UNRANKED";
@@ -61,23 +61,20 @@ const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
+const USERNAME_STORAGE_KEY = "tierlist_username";
 const POST_AUTH_SCREEN_STORAGE_KEY = "tierlist_post_auth_screen";
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
 const USER_DATA_STORAGE_KEY_PREFIX = "tierlist_user_data_";
+const CANONICAL_HOST = "tierlist.studiojpg.co";
 
-function getOrCreateClientUserId() {
-  const fallbackId = `u_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+function readStoredUsername() {
   try {
-    const existing = window.localStorage.getItem(CLIENT_USER_STORAGE_KEY);
-    if (existing && /^[A-Za-z0-9_-]{8,80}$/.test(existing)) return existing;
-    const generated = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? `u_${crypto.randomUUID().replace(/-/g, "")}`
-      : fallbackId;
-    window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, generated);
-    return generated;
+    const existing = window.localStorage.getItem(USERNAME_STORAGE_KEY) || window.localStorage.getItem(CLIENT_USER_STORAGE_KEY);
+    if (existing && /^[A-Za-z0-9_]{3,24}$/.test(existing)) return existing;
   } catch {
-    return fallbackId;
+    return "";
   }
+  return "";
 }
 
 function apiUrl(path: string) {
@@ -131,8 +128,9 @@ function readLocalWorkspace(userId: string) {
 }
 
 function App() {
-  const initialClientUserId = getOrCreateClientUserId();
+  const initialClientUserId = readStoredUsername();
   const clientUserIdRef = useRef(initialClientUserId);
+  const [username, setUsername] = useState(initialClientUserId);
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState<Screen>("setup");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readStoredTheme(initialClientUserId));
@@ -151,6 +149,8 @@ function App() {
   const [steamManualOpen, setSteamManualOpen] = useState(false);
   const [manualSteamId, setManualSteamId] = useState("");
   const [manualSteamSaving, setManualSteamSaving] = useState(false);
+  const [usernameDraft, setUsernameDraft] = useState("");
+  const [usernameSaving, setUsernameSaving] = useState(false);
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -163,6 +163,7 @@ function App() {
   const tierStateReadyRef = useRef(false);
   const lastSavedTierStateRef = useRef(serializeTierState(DEFAULT_TIER_STATE));
   const workspaceHydratedRef = useRef(false);
+  const hasUsername = Boolean(username);
 
   function apiFetch(path: string, init: RequestInit = {}) {
     const requestUrl = new URL(apiUrl(path), window.location.origin);
@@ -185,9 +186,24 @@ function App() {
     }, {});
   }, [linkedAccounts]);
 
-  const hasSetup = linkedAccounts.length > 0 || games.length > 0;
-
   useEffect(() => {
+    if (
+      window.location.hostname &&
+      window.location.hostname !== "localhost" &&
+      window.location.hostname !== "127.0.0.1" &&
+      window.location.hostname !== CANONICAL_HOST
+    ) {
+      window.location.replace(`https://${CANONICAL_HOST}${window.location.pathname}${window.location.search}${window.location.hash}`);
+      return;
+    }
+
+    if (!clientUserIdRef.current) {
+      setScreen("setup");
+      setLoading(false);
+      workspaceHydratedRef.current = true;
+      return;
+    }
+
     const local = readLocalWorkspace(clientUserIdRef.current);
     if (local) {
       setLinkedAccounts(local.linkedAccounts);
@@ -196,10 +212,8 @@ function App() {
       setThemeMode(local.themeMode ?? "dark");
       lastSavedTierStateRef.current = serializeTierState(local.tierState ?? DEFAULT_TIER_STATE);
       tierStateReadyRef.current = true;
+      setScreen("stats");
       setLoading(false);
-      if (local.linkedAccounts.length > 0 || local.games.length > 0) {
-        setScreen("accounts");
-      }
     }
     workspaceHydratedRef.current = true;
     void refreshAll();
@@ -350,6 +364,11 @@ function App() {
   }, [tierState]);
 
   async function refreshAll() {
+    if (!clientUserIdRef.current) {
+      setLoading(false);
+      setScreen("setup");
+      return;
+    }
     try {
       const bootstrapResp = await apiFetch("/api/v1/bootstrap");
       const bootstrap = await bootstrapResp.json();
@@ -364,11 +383,7 @@ function App() {
       lastSavedTierStateRef.current = serializeTierState(nextTierState);
       tierStateReadyRef.current = true;
       setThemeMode(nextTheme);
-      if (nextAccounts.length > 0 || nextGames.length > 0) {
-        setScreen((s) => (s === "setup" ? "accounts" : s));
-      } else {
-        setScreen("setup");
-      }
+      setScreen((s) => (s === "setup" ? "stats" : s));
     } finally {
       setLoading(false);
     }
@@ -388,6 +403,74 @@ function App() {
     if (!silent) {
       setStatus(resp.ok ? "Saved" : "Save failed");
       setTimeout(() => setStatus(""), 1200);
+    }
+  }
+
+  async function applyUsernameSession(userId: string, nextScreen: Screen) {
+    clientUserIdRef.current = userId;
+    setUsername(userId);
+    try {
+      window.localStorage.setItem(USERNAME_STORAGE_KEY, userId);
+      window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, userId);
+    } catch {
+      // ignore storage access failures
+    }
+    setThemeMode(readStoredTheme(userId));
+    setLoading(true);
+    setScreen(nextScreen);
+    await refreshAll();
+    setScreen(nextScreen);
+  }
+
+  async function createUsername() {
+    const draft = usernameDraft.trim();
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(draft)) {
+      setStatus("Username must be 3-24 chars and use letters, numbers, or _ only.");
+      return;
+    }
+    setUsernameSaving(true);
+    try {
+      const resp = await fetch(apiUrl("/api/v1/users/claim-username"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: draft })
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        setStatus(json?.error || "Could not create username.");
+        return;
+      }
+      await applyUsernameSession(json.user.id, "accounts");
+      setStatus(`Welcome, ${json.user.id}.`);
+      setUsernameDraft("");
+    } finally {
+      setUsernameSaving(false);
+    }
+  }
+
+  async function loginUsername() {
+    const draft = usernameDraft.trim();
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(draft)) {
+      setStatus("Enter a valid username.");
+      return;
+    }
+    setUsernameSaving(true);
+    try {
+      const resp = await fetch(apiUrl("/api/v1/users/login-username"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: draft })
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        setStatus(json?.error || "Login failed.");
+        return;
+      }
+      await applyUsernameSession(json.user.id, "stats");
+      setStatus(`Signed in as ${json.user.id}.`);
+      setUsernameDraft("");
+    } finally {
+      setUsernameSaving(false);
     }
   }
 
@@ -770,6 +853,7 @@ function App() {
         <div>
           <h1>Tier List Your Games</h1>
           <p>Created by GarrettJPG</p>
+          <p>{hasUsername ? `@${username}` : "No username yet"}</p>
         </div>
         <div className="header-actions">
           <button onClick={() => void setMode(themeMode === "dark" ? "light" : "dark")}>
@@ -783,29 +867,45 @@ function App() {
       {status && <div className="status-banner">{status}</div>}
 
       <nav className="app-nav">
-        <button className={screen === "setup" ? "active" : ""} onClick={() => setScreen("setup")}>Setup</button>
-        <button className={screen === "accounts" ? "active" : ""} onClick={() => setScreen("accounts")}>Accounts</button>
-        <button className={screen === "games" ? "active" : ""} onClick={() => setScreen("games")}>Games</button>
-        <button className={screen === "editor" ? "active" : ""} onClick={() => setScreen("editor")}>Tier List</button>
+        <button
+          className={(hasUsername ? screen === "stats" : screen === "setup") ? "active" : ""}
+          onClick={() => setScreen(hasUsername ? "stats" : "setup")}
+        >
+          {hasUsername ? "Stats" : "Setup"}
+        </button>
+        <button className={screen === "accounts" ? "active" : ""} onClick={() => setScreen("accounts")} disabled={!hasUsername}>Accounts</button>
+        <button className={screen === "games" ? "active" : ""} onClick={() => setScreen("games")} disabled={!hasUsername}>Games</button>
+        <button className={screen === "editor" ? "active" : ""} onClick={() => setScreen("editor")} disabled={!hasUsername}>Tier List</button>
       </nav>
 
       {screen === "setup" && (
         <section className="panel setup-panel">
           <h2>Setup</h2>
-          {!hasSetup ? (
-            <>
-              <p>Start by connecting an account.</p>
-              <button className="primary" onClick={() => setScreen("accounts")}>Start Setup</button>
-            </>
-          ) : (
-            <>
-              <p>Your workspace is ready.</p>
-              <div className="setup-stats">
-                <div><strong>{games.length}</strong><span>Games</span></div>
-                <div><strong>{linkedAccounts.length}</strong><span>Accounts</span></div>
-              </div>
-            </>
-          )}
+          <p>Create a username or log in to your existing one.</p>
+          <div className="modal-search">
+            <input
+              value={usernameDraft}
+              onChange={(e) => setUsernameDraft(e.target.value)}
+              placeholder="Username"
+            />
+            <button onClick={() => void createUsername()} disabled={usernameSaving}>
+              {usernameSaving ? "Working..." : "Create Username"}
+            </button>
+            <button onClick={() => void loginUsername()} disabled={usernameSaving}>
+              {usernameSaving ? "Working..." : "Login"}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {screen === "stats" && hasUsername && (
+        <section className="panel setup-panel">
+          <h2>Stats</h2>
+          <div className="setup-stats">
+            <div><strong>{games.length}</strong><span>Games</span></div>
+            <div><strong>{linkedAccounts.length}</strong><span>Accounts</span></div>
+          </div>
+          <button className="primary" onClick={() => setScreen("accounts")}>Go to Accounts</button>
         </section>
       )}
 

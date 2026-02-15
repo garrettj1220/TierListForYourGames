@@ -6,7 +6,7 @@
   "description": "Standalone MVP to connect accounts, sync game libraries, rank titles into S/A/B/C/D/F tiers, and export results.",
   "tags": ["games", "tier-list", "ranking", "library", "steam", "mvp"],
   "cover_image": "https://raw.githubusercontent.com/garrettj1220/TierListForYourGames/main/Art/Cover/CoverArt.png",
-  "launch_url": "https://tierlist-site.onrender.com",
+  "launch_url": "https://tierlist.studiojpg.co",
   "integration_mode": "external",
   "status": "live",
   "card_cta": "View Repo"
