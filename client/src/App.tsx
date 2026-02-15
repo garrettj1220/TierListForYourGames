@@ -61,7 +61,6 @@ const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const DRAG_EDGE_HYSTERESIS_PX = 10;
-const REORDER_EDGE_ZONE_PX = 16;
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
 const USERNAME_STORAGE_KEY = "tierlist_username";
@@ -163,6 +162,8 @@ function App() {
   const dragImageRef = useRef<HTMLElement | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
   const autoScrollRafRef = useRef<number | null>(null);
+  const dragGameIdRef = useRef<string | null>(null);
+  const dragOverRef = useRef<DragLocation | null>(null);
   const tierAutosaveTimeoutRef = useRef<number | null>(null);
   const tierStateReadyRef = useRef(false);
   const lastSavedTierStateRef = useRef(serializeTierState(DEFAULT_TIER_STATE));
@@ -189,6 +190,17 @@ function App() {
       return acc;
     }, {});
   }, [linkedAccounts]);
+
+  const orderedUnrankedIds = useMemo(() => {
+    const withCover: string[] = [];
+    const withoutCover: string[] = [];
+    for (const id of tierState.unranked) {
+      const game = gameMap.get(id);
+      if (game?.coverArtUrl) withCover.push(id);
+      else withoutCover.push(id);
+    }
+    return [...withCover, ...withoutCover];
+  }, [tierState.unranked, gameMap]);
 
   useEffect(() => {
     if (!clientUserIdRef.current) {
@@ -239,6 +251,46 @@ function App() {
       // ignore storage access failures
     }
   }, [linkedAccounts, games, tierState, themeMode, loading]);
+
+  useEffect(() => {
+    dragGameIdRef.current = dragGameId;
+  }, [dragGameId]);
+
+  useEffect(() => {
+    if (!touchDrag) return;
+    const onGlobalPointerMove = (event: PointerEvent) => {
+      if (event.pointerId !== touchDrag.pointerId) return;
+      dragPointerYRef.current = event.clientY;
+      setTouchDrag((prev) => (prev ? { ...prev, x: event.clientX, y: event.clientY } : prev));
+      const nextLocation = locationFromPoint(event.clientX, event.clientY);
+      if (!nextLocation) return;
+      setDragOver((prev) => {
+        if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
+          return prev;
+        }
+        dragOverRef.current = nextLocation;
+        return nextLocation;
+      });
+    };
+    const onGlobalPointerFinalize = (event: PointerEvent) => {
+      if (event.pointerId !== touchDrag.pointerId) return;
+      const latestOver = dragOverRef.current ?? locationFromPoint(event.clientX, event.clientY);
+      const gameId = dragGameIdRef.current;
+      if (gameId && latestOver) {
+        dropGame(gameId, latestOver.target, latestOver.index);
+        return;
+      }
+      endDrag();
+    };
+    window.addEventListener("pointermove", onGlobalPointerMove);
+    window.addEventListener("pointerup", onGlobalPointerFinalize);
+    window.addEventListener("pointercancel", onGlobalPointerFinalize);
+    return () => {
+      window.removeEventListener("pointermove", onGlobalPointerMove);
+      window.removeEventListener("pointerup", onGlobalPointerFinalize);
+      window.removeEventListener("pointercancel", onGlobalPointerFinalize);
+    };
+  }, [touchDrag, locationFromPoint]);
 
   useEffect(() => {
     if (!dropFlashTarget) return;
@@ -791,6 +843,7 @@ function App() {
     if (origin?.target === "UNRANKED" && target === "UNRANKED") {
       // Dragging within unranked should never reorder; keep original position.
       setDragOver(null);
+      dragOverRef.current = null;
       setDragOrigin(null);
       setDragGameId(null);
       return;
@@ -816,6 +869,7 @@ function App() {
       return next;
     });
     setDragOver(null);
+    dragOverRef.current = null;
     setDragOrigin(null);
     setDragGameId(null);
   }
@@ -851,6 +905,7 @@ function App() {
     setDragGameId(gameId);
     setDragOrigin({ target, index });
     setDragOver({ target, index });
+    dragOverRef.current = { target, index };
     setOriginPlaceholderActive(true);
     setTouchDrag({
       pointerId: e.pointerId,
@@ -874,6 +929,7 @@ function App() {
     setDragGameId(null);
     setDragOrigin(null);
     setDragOver(null);
+    dragOverRef.current = null;
     setOriginPlaceholderActive(false);
     setTouchDrag(null);
     dragPointerYRef.current = null;
@@ -894,11 +950,16 @@ function App() {
       }
       const index = Number(cardEl.dataset.index || 0);
       const rect = cardEl.getBoundingClientRect();
-      const leftEdgeZone = rect.left + REORDER_EDGE_ZONE_PX;
-      const rightEdgeZone = rect.right - REORDER_EDGE_ZONE_PX;
-      if (x <= leftEdgeZone) return { target, index };
-      if (x >= rightEdgeZone) return { target, index: index + 1 };
-      return { target, index: ids.length };
+      const midpoint = rect.left + rect.width / 2;
+      const distanceToMid = Math.abs(x - midpoint);
+      if (
+        distanceToMid <= DRAG_EDGE_HYSTERESIS_PX &&
+        dragOver?.target === target &&
+        (dragOver.index === index || dragOver.index === index + 1)
+      ) {
+        return { target, index: dragOver.index };
+      }
+      return { target, index: x < midpoint ? index : index + 1 };
     }
     const rowEl = node?.closest<HTMLElement>("[data-drop-row='true']");
     if (rowEl) {
@@ -923,11 +984,8 @@ function App() {
         const rect = cardEls[i].getBoundingClientRect();
         if (y < rect.top) return { target, index: i };
         if (y <= rect.bottom) {
-          const leftEdgeZone = rect.left + REORDER_EDGE_ZONE_PX;
-          const rightEdgeZone = rect.right - REORDER_EDGE_ZONE_PX;
-          if (x <= leftEdgeZone) return { target, index: i };
-          if (x >= rightEdgeZone) return { target, index: i + 1 };
-          return { target, index: cardEls.length };
+          const midpoint = rect.left + rect.width / 2;
+          return { target, index: x < midpoint ? i : i + 1 };
         }
       }
       return { target, index: cardEls.length };
@@ -946,19 +1004,9 @@ function App() {
       if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
         return prev;
       }
+      dragOverRef.current = nextLocation;
       return nextLocation;
     });
-  }
-
-  function onTouchPointerUp(e: React.PointerEvent<HTMLElement>) {
-    if (!touchDrag || e.pointerId !== touchDrag.pointerId) return;
-    e.preventDefault();
-    const latestOver = locationFromPoint(e.clientX, e.clientY);
-    if (dragGameId && latestOver) {
-      dropGame(dragGameId, latestOver.target, latestOver.index);
-      return;
-    }
-    endDrag();
   }
 
   return (
@@ -1130,22 +1178,23 @@ function App() {
                     const game = gameMap.get(id);
                     if (!game) return null;
                     const isOriginDragging =
-                      dragGameId === id && originPlaceholderActive && dragOrigin?.target === tier && dragOrigin.index === idx;
-                    if (isOriginDragging) return null;
+                      dragGameId === id &&
+                      originPlaceholderActive &&
+                      dragOrigin?.target === tier &&
+                      dragOrigin.index === idx &&
+                      dragOver?.target === tier;
                     return (
-                      <div key={id} className="tier-item-slot">
+                      <div key={id} className={`tier-item-slot${isOriginDragging ? " is-drag-origin" : ""}`}>
                         {dragGameId && dragOver?.target === tier && dragOver.index === idx && (
                           <div className="tier-insert-slot" aria-hidden="true" />
                         )}
                         <article
-                          className="tier-game"
+                          className={`tier-game${isOriginDragging ? " is-origin-placeholder" : ""}`}
                           data-drop-card="true"
                           data-target={tier}
                           data-index={idx}
                           onPointerDown={(e) => startTouchDrag(id, tier, idx, e)}
                           onPointerMove={onTouchPointerMove}
-                          onPointerUp={onTouchPointerUp}
-                          onPointerCancel={onTouchPointerUp}
                         >
                           {game.coverArtUrl ? (
                               <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
@@ -1173,24 +1222,25 @@ function App() {
               <header>
                 <span className="tier-label">Unranked</span>
               </header>
-              <div className={`tier-cards tier-cards-unranked ${tierState.unranked.length === 0 ? "is-empty" : ""}`}>
-                {tierState.unranked.map((id, idx) => {
+              <div className={`tier-cards tier-cards-unranked ${orderedUnrankedIds.length === 0 ? "is-empty" : ""}`}>
+                {orderedUnrankedIds.map((id, idx) => {
                   const game = gameMap.get(id);
                   if (!game) return null;
                   const isOriginDragging =
-                    dragGameId === id && originPlaceholderActive && dragOrigin?.target === "UNRANKED" && dragOrigin.index === idx;
-                  if (isOriginDragging) return null;
+                    dragGameId === id &&
+                    originPlaceholderActive &&
+                    dragOrigin?.target === "UNRANKED" &&
+                    dragOrigin.index === idx &&
+                    dragOver?.target === "UNRANKED";
                   return (
-                    <div key={id} className="tier-item-slot">
+                    <div key={id} className={`tier-item-slot${isOriginDragging ? " is-drag-origin" : ""}`}>
                       <article
-                        className="tier-game"
+                        className={`tier-game${isOriginDragging ? " is-origin-placeholder" : ""}`}
                         data-drop-card="true"
                         data-target="UNRANKED"
                         data-index={idx}
                         onPointerDown={(e) => startTouchDrag(id, "UNRANKED", idx, e)}
                         onPointerMove={onTouchPointerMove}
-                        onPointerUp={onTouchPointerUp}
-                        onPointerCancel={onTouchPointerUp}
                       >
                         {game.coverArtUrl ? (
                             <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
