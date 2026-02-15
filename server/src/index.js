@@ -1,7 +1,6 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nowIso } from "./db.js";
@@ -14,6 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const artDir = path.join(__dirname, "../../Art");
 const storage = createStorage();
+const STUDIO_AUTH_BASE = String(process.env.STUDIO_AUTH_BASE || "https://api.studiojpg.co").replace(/\/$/, "");
 let igdbTokenCache = {
   accessToken: null,
   expiresAtMs: 0
@@ -26,32 +26,6 @@ app.use("/art", express.static(artDir));
 
 function hasEnv(name) {
   return Boolean(String(process.env[name] || "").trim());
-}
-
-function normalizeUsername(input) {
-  const username = String(input || "").trim();
-  if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) return null;
-  return username;
-}
-
-function normalizePassword(input) {
-  const password = String(input || "");
-  if (password.length < 6 || password.length > 128) return null;
-  return password;
-}
-
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return { salt, hash };
-}
-
-function verifyPassword(password, salt, hash) {
-  if (!salt || !hash) return false;
-  const expected = Buffer.from(hash, "hex");
-  const candidate = Buffer.from(crypto.scryptSync(password, salt, 64).toString("hex"), "hex");
-  if (expected.length !== candidate.length) return false;
-  return crypto.timingSafeEqual(expected, candidate);
 }
 
 function ensureRequiredEnvForProduction() {
@@ -133,31 +107,35 @@ function resolveFrontendUrl(req) {
   return frontendUrl();
 }
 
-async function clearLegacySharedWorkspace() {
+async function fetchStudioAuthUser(req) {
   try {
-    await storage.clearUserWorkspace("demo-user");
-  } catch (error) {
-    console.error("Failed to clear legacy demo-user workspace", error);
-  }
-}
-
-function normalizeClientUserId(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return null;
-  if (!/^[A-Za-z0-9_]{3,24}$/.test(raw)) return null;
-  return raw;
-}
-
-function requireUserId(req, res) {
-  const fromHeader = req.get("x-client-user-id");
-  const fromQuery = queryValue(req, "client_user_id");
-  const fromOpenIdReturnTo = readFromOpenIdReturnTo(req, "client_user_id");
-  const userId = normalizeClientUserId(fromHeader || fromQuery || fromOpenIdReturnTo);
-  if (!userId) {
-    res.status(400).json({ error: "Missing or invalid client user id" });
+    const resp = await fetch(`${STUDIO_AUTH_BASE}/api/auth/me`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Cookie: req.headers.cookie || ""
+      }
+    });
+    if (!resp.ok) return null;
+    const payload = await resp.json().catch(() => null);
+    const rawUser = payload?.user ?? payload;
+    const userId = String(rawUser?.user_id || rawUser?.id || "").trim();
+    if (!userId) return null;
+    const username = String(rawUser?.username || rawUser?.name || userId).trim() || userId;
+    const email = String(rawUser?.email || "").trim() || null;
+    return { userId, username, email, raw: rawUser };
+  } catch {
     return null;
   }
-  return userId;
+}
+
+async function requireAuthenticatedUser(req, res) {
+  const authUser = await fetchStudioAuthUser(req);
+  if (!authUser) {
+    res.status(401).json({ error: "Authentication required." });
+    return null;
+  }
+  return authUser;
 }
 
 app.get("/", (_req, res) => {
@@ -181,68 +159,50 @@ app.get("/api/v1/themes", (_req, res) => {
   res.json({ themes: themeCatalog, defaultThemeId: "dark" });
 });
 
-app.post("/api/v1/users/create-account", async (req, res) => {
-  const username = normalizeUsername(req.body?.username);
-  const password = normalizePassword(req.body?.password);
-  if (!username) {
-    return res.status(400).json({ error: "Username must be 3-24 chars and use letters, numbers, or _ only." });
+app.get("/api/v1/auth/me", async (req, res) => {
+  const authUser = await fetchStudioAuthUser(req);
+  if (!authUser) {
+    return res.status(401).json({ error: "Authentication required." });
   }
-  if (!password) {
-    return res.status(400).json({ error: "Password must be 6-128 characters." });
-  }
-  const { salt, hash } = hashPassword(password);
-  const result = await storage.createAccount(username, salt, hash);
-  if (!result.claimed) {
-    return res.status(409).json({ error: result.error || "Username is already taken." });
-  }
-  return res.status(201).json({ ok: true, user: result.user });
-});
-
-app.post("/api/v1/users/login", async (req, res) => {
-  const username = normalizeUsername(req.body?.username);
-  const password = normalizePassword(req.body?.password);
-  if (!username) {
-    return res.status(400).json({ error: "Username must be 3-24 chars and use letters, numbers, or _ only." });
-  }
-  if (!password) {
-    return res.status(400).json({ error: "Password must be 6-128 characters." });
-  }
-  const user = await storage.loginAccount(username);
-  if (!user) {
-    return res.status(404).json({ error: "Account not found." });
-  }
-  const ok = verifyPassword(password, user.passwordSalt, user.passwordHash);
-  if (!ok) {
-    return res.status(401).json({ error: "Invalid username or password." });
-  }
-  return res.json({ ok: true, user: { id: user.id, name: user.name || user.id } });
-});
-
-app.post("/api/v1/users/claim-username", async (_req, res) => {
-  return res.status(400).json({ error: "Use /api/v1/users/create-account with username + password." });
-});
-
-app.post("/api/v1/users/login-username", async (_req, res) => {
-  return res.status(400).json({ error: "Use /api/v1/users/login with username + password." });
+  return res.json({
+    ok: true,
+    user: {
+      id: authUser.userId,
+      user_id: authUser.userId,
+      username: authUser.username,
+      email: authUser.email
+    }
+  });
 });
 
 app.get("/api/v1/bootstrap", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
-  const data = await storage.bootstrap(userId);
-  res.json(data);
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const data = await storage.bootstrap(authUser.userId);
+  res.json({
+    ...data,
+    user: {
+      id: authUser.userId,
+      user_id: authUser.userId,
+      name: authUser.username,
+      username: authUser.username,
+      email: authUser.email
+    }
+  });
 });
 
 app.get("/api/v1/accounts", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const linkedAccounts = await storage.getLinkedAccounts(userId);
   res.json({ linkedAccounts });
 });
 
 app.post("/api/v1/accounts/link", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const { platform, accountName, externalUserId = null, metadata = {} } = req.body ?? {};
   if (!platform || !accountName) {
     return res.status(400).json({ error: "platform and accountName are required" });
@@ -252,29 +212,30 @@ app.post("/api/v1/accounts/link", async (req, res) => {
 });
 
 app.delete("/api/v1/accounts/:accountId", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const result = await storage.removeAccount(userId, req.params.accountId);
   if (!result.removed) return res.status(404).json({ error: "account not found" });
   return res.json({ ok: true, ...result });
 });
 
 app.post("/api/v1/users/me/clear-all", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const result = await storage.clearUserWorkspace(userId);
   return res.json({ ok: true, ...result });
 });
 
-app.get("/api/v1/accounts/steam/start", (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+app.get("/api/v1/accounts/steam/start", async (req, res) => {
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
   const baseUrl = appUrl(req);
   const frontend = resolveFrontendUrl(req);
   const authPopup = queryValue(req, "auth_popup") === "1" ? "1" : "0";
   const toolsReturnUrl = safeAbsoluteUrl(queryValue(req, "tools_return_url"));
   const returnToUrl = new URL(`${baseUrl}/api/v1/accounts/steam/callback`);
-  returnToUrl.searchParams.set("client_user_id", userId);
   returnToUrl.searchParams.set("frontend_url", frontend);
   if (authPopup === "1") returnToUrl.searchParams.set("auth_popup", "1");
   if (toolsReturnUrl) returnToUrl.searchParams.set("tools_return_url", toolsReturnUrl);
@@ -291,9 +252,12 @@ app.get("/api/v1/accounts/steam/start", (req, res) => {
 });
 
 app.get("/api/v1/accounts/steam/callback", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await fetchStudioAuthUser(req);
+  const userId = authUser?.userId || "";
   const frontend = resolveFrontendUrl(req);
+  if (!userId) {
+    return res.redirect(`${frontend}/?steam=failed_auth`);
+  }
   const authPopup = readFromOpenIdReturnTo(req, "auth_popup") === "1" || queryValue(req, "auth_popup") === "1";
   const toolsReturnUrl = safeAbsoluteUrl(readFromOpenIdReturnTo(req, "tools_return_url") || queryValue(req, "tools_return_url"));
   const q = req.query;
@@ -344,13 +308,13 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
         const games = await fetchSteamOwnedGames(steamId);
         await storage.ingestSteamLibrary(userId, linked.id, games);
         return res.redirect(
-          `${frontend}/?steam=linked&username=${encodeURIComponent(userId)}${authPopup ? "&auth_popup=1" : ""}${
+          `${frontend}/?steam=linked${authPopup ? "&auth_popup=1" : ""}${
             toolsReturnUrl ? `&tools_return_url=${encodeURIComponent(toolsReturnUrl)}` : ""
           }`
         );
       } catch {
         return res.redirect(
-          `${frontend}/?steam=linked_sync_failed&username=${encodeURIComponent(userId)}${authPopup ? "&auth_popup=1" : ""}${
+          `${frontend}/?steam=linked_sync_failed${authPopup ? "&auth_popup=1" : ""}${
             toolsReturnUrl ? `&tools_return_url=${encodeURIComponent(toolsReturnUrl)}` : ""
           }`
         );
@@ -358,13 +322,13 @@ app.get("/api/v1/accounts/steam/callback", async (req, res) => {
     }
 
     return res.redirect(
-      `${frontend}/?steam=linked_no_key&username=${encodeURIComponent(userId)}${authPopup ? "&auth_popup=1" : ""}${
+      `${frontend}/?steam=linked_no_key${authPopup ? "&auth_popup=1" : ""}${
         toolsReturnUrl ? `&tools_return_url=${encodeURIComponent(toolsReturnUrl)}` : ""
       }`
     );
   } catch {
     return res.redirect(
-      `${frontend}/?steam=failed&username=${encodeURIComponent(userId)}${authPopup ? "&auth_popup=1" : ""}${
+      `${frontend}/?steam=failed${authPopup ? "&auth_popup=1" : ""}${
         toolsReturnUrl ? `&tools_return_url=${encodeURIComponent(toolsReturnUrl)}` : ""
       }`
     );
@@ -413,8 +377,9 @@ async function fetchSteamPersonaName(steamId) {
 }
 
 app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const account = await storage.getAccount(userId, req.params.accountId);
   const steamId = account?.external_user_id ?? account?.externalUserId;
   if (!account || account.platform !== "Steam" || !steamId) {
@@ -431,8 +396,9 @@ app.post("/api/v1/accounts/steam/sync/:accountId", async (req, res) => {
 });
 
 app.post("/api/v1/accounts/steam/manual", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const steamId = parseSteamId(req.body?.steamId);
   if (!steamId) {
     return res.status(400).json({ error: "Enter a valid SteamID64 or profile URL with numeric Steam ID." });
@@ -465,8 +431,9 @@ app.post("/api/v1/accounts/steam/manual", async (req, res) => {
 });
 
 app.post("/api/v1/accounts/sync-all", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const accounts = await storage.getLinkedAccounts(userId);
   const result = {
     scanned: accounts.length,
@@ -502,8 +469,9 @@ app.post("/api/v1/accounts/sync-all", async (req, res) => {
 });
 
 app.put("/api/v1/users/me/theme", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const { themeId } = req.body ?? {};
   if (!themeId) {
     return res.status(400).json({ error: "themeId is required" });
@@ -517,15 +485,17 @@ app.put("/api/v1/users/me/theme", async (req, res) => {
 });
 
 app.get("/api/v1/games", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const games = await storage.getGames(userId);
   res.json({ games });
 });
 
 app.post("/api/v1/games/manual", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const { title, platform, genre, popularity = 50, coverArtUrl, sourceKey, metadata, manuallyAdded } = req.body ?? {};
   if (!title) {
     return res.status(400).json({ error: "title is required" });
@@ -544,8 +514,9 @@ app.post("/api/v1/games/manual", async (req, res) => {
 });
 
 app.post("/api/v1/games/remove", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const { gameIds } = req.body ?? {};
   if (!Array.isArray(gameIds)) {
     return res.status(400).json({ error: "gameIds must be an array" });
@@ -555,8 +526,9 @@ app.post("/api/v1/games/remove", async (req, res) => {
 });
 
 app.put("/api/v1/tier-list/state", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
   const { tiers, unranked } = req.body ?? {};
   if (!tiers || !unranked) {
     return res.status(400).json({ error: "tiers and unranked are required" });
@@ -680,6 +652,5 @@ app.post("/api/v1/metadata/search", async (req, res) => {
 
 app.listen(PORT, "0.0.0.0", () => {
   ensureRequiredEnvForProduction();
-  void clearLegacySharedWorkspace();
   console.log(`Tier List Your Games API listening on http://0.0.0.0:${PORT}`);
 });

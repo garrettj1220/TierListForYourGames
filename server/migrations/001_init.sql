@@ -67,20 +67,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS linked_accounts_user_platform_name_uidx
 
 CREATE INDEX IF NOT EXISTS games_normalized_title_norm_idx
   ON games_normalized ((regexp_replace(LOWER(title), '[^a-z0-9]+', '', 'g')));
-
-INSERT INTO users (id, name)
-VALUES ('demo-user', 'Demo User')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
-VALUES (
-  'demo-user',
-  '{"S":[],"A":[],"B":[],"C":[],"D":[],"F":[]}'::jsonb,
-  '[]'::jsonb,
-  NULL
-)
-ON CONFLICT (user_id) DO NOTHING;
-
-INSERT INTO user_theme_settings (user_id, theme_id)
-VALUES ('demo-user', 'dark')
-ON CONFLICT (user_id) DO NOTHING;

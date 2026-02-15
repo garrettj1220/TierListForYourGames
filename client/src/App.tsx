@@ -65,21 +65,11 @@ const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
 const AUTO_SCROLL_HOLD_MS = 900;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
-const CLIENT_USER_STORAGE_KEY = "tierlist_client_user_id";
-const USERNAME_STORAGE_KEY = "tierlist_username";
-const POST_AUTH_SCREEN_STORAGE_KEY = "tierlist_post_auth_screen";
+const STUDIO_WEB_BASE = "https://studiojpg.co";
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
 const USER_DATA_STORAGE_KEY_PREFIX = "tierlist_user_data_";
-const AUTH_RESULT_STORAGE_KEY = "tierlist_auth_result";
-const AUTH_MESSAGE_TYPE = "tierlist-auth-complete";
 
 function readStoredUsername() {
-  try {
-    const existing = window.localStorage.getItem(USERNAME_STORAGE_KEY) || window.localStorage.getItem(CLIENT_USER_STORAGE_KEY);
-    if (existing && /^[A-Za-z0-9_]{3,24}$/.test(existing)) return existing;
-  } catch {
-    return "";
-  }
   return "";
 }
 
@@ -135,7 +125,6 @@ function readLocalWorkspace(userId: string) {
 
 function App() {
   const initialClientUserId = readStoredUsername();
-  const clientUserIdRef = useRef(initialClientUserId);
   const [username, setUsername] = useState(initialClientUserId);
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState<Screen>("setup");
@@ -154,9 +143,7 @@ function App() {
   const [steamManualOpen, setSteamManualOpen] = useState(false);
   const [manualSteamId, setManualSteamId] = useState("");
   const [manualSteamSaving, setManualSteamSaving] = useState(false);
-  const [usernameDraft, setUsernameDraft] = useState("");
-  const [passwordDraft, setPasswordDraft] = useState("");
-  const [usernameSaving, setUsernameSaving] = useState(false);
+  const [authMissing, setAuthMissing] = useState(false);
   const [coverLoadFailures, setCoverLoadFailures] = useState<Record<string, true>>({});
 
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -178,10 +165,7 @@ function App() {
 
   function apiFetch(path: string, init: RequestInit = {}) {
     const requestUrl = new URL(apiUrl(path), window.location.origin);
-    requestUrl.searchParams.set("client_user_id", clientUserIdRef.current);
-    const headers = new Headers(init.headers ?? {});
-    headers.set("x-client-user-id", clientUserIdRef.current);
-    return fetch(requestUrl.toString(), { ...init, headers });
+    return fetch(requestUrl.toString(), { ...init, credentials: "include" });
   }
 
   const gameMap = useMemo(() => {
@@ -219,14 +203,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!clientUserIdRef.current) {
-      setScreen("setup");
-      setLoading(false);
-      workspaceHydratedRef.current = true;
-      return;
-    }
-
-    const local = readLocalWorkspace(clientUserIdRef.current);
+    const local = readLocalWorkspace("studio");
     if (local) {
       setLinkedAccounts(local.linkedAccounts);
       setGames(local.games.map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null })));
@@ -244,17 +221,17 @@ function App() {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", themeMode);
     try {
-      window.localStorage.setItem(getThemeStorageKey(clientUserIdRef.current), themeMode);
+      window.localStorage.setItem(getThemeStorageKey(username || "studio"), themeMode);
     } catch {
       // ignore storage access failures
     }
-  }, [themeMode]);
+  }, [themeMode, username]);
 
   useEffect(() => {
-    if (!workspaceHydratedRef.current || loading) return;
+    if (!workspaceHydratedRef.current || loading || !username) return;
     try {
       window.localStorage.setItem(
-        getUserDataStorageKey(clientUserIdRef.current),
+        getUserDataStorageKey(username),
         JSON.stringify({
           linkedAccounts,
           games,
@@ -266,7 +243,7 @@ function App() {
     } catch {
       // ignore storage access failures
     }
-  }, [linkedAccounts, games, tierState, themeMode, loading]);
+  }, [linkedAccounts, games, tierState, themeMode, loading, username]);
 
   useEffect(() => {
     dragGameIdRef.current = dragGameId;
@@ -402,67 +379,21 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const steam = params.get("steam");
-    const callbackUsername = params.get("username");
     const authPopup = params.get("auth_popup") === "1";
     const toolsReturnUrl = params.get("tools_return_url");
     if (!steam) return;
-    if (callbackUsername && /^[A-Za-z0-9_]{3,24}$/.test(callbackUsername)) {
-      clientUserIdRef.current = callbackUsername;
-      setUsername(callbackUsername);
-      try {
-        window.localStorage.setItem(USERNAME_STORAGE_KEY, callbackUsername);
-        window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, callbackUsername);
-      } catch {
-        // ignore storage access failures
-      }
-    }
     if (steam === "linked") setStatus("Steam account connected.");
     if (steam === "linked_no_key") setStatus("Steam connected. Add STEAM_WEB_API_KEY to sync games.");
     if (steam === "linked_sync_failed") setStatus("Steam connected. Game sync failed.");
     if (steam === "failed") setStatus("Steam sign-in failed.");
+    if (steam === "failed_auth") setStatus("U do not have an account with us.");
     const fallbackScreen: Screen = "accounts";
     let targetScreen: Screen = fallbackScreen;
-    try {
-      const stored = window.localStorage.getItem(POST_AUTH_SCREEN_STORAGE_KEY);
-      if (stored === "setup" || stored === "accounts" || stored === "games" || stored === "editor") {
-        targetScreen = stored;
-      }
-      window.localStorage.removeItem(POST_AUTH_SCREEN_STORAGE_KEY);
-    } catch {
-      targetScreen = fallbackScreen;
-    }
     if (steam === "linked" || steam === "linked_no_key" || steam === "linked_sync_failed") {
       targetScreen = "accounts";
     }
-    try {
-      window.localStorage.setItem(
-        AUTH_RESULT_STORAGE_KEY,
-        JSON.stringify({
-          steam,
-          username: callbackUsername || clientUserIdRef.current || "",
-          at: Date.now()
-        })
-      );
-    } catch {
-      // ignore storage access failures
-    }
     window.history.replaceState({}, "", window.location.pathname);
     if (authPopup) {
-      try {
-        if (window.opener && !window.opener.closed) {
-          window.opener.postMessage(
-            {
-              type: AUTH_MESSAGE_TYPE,
-              steam,
-              username: callbackUsername || clientUserIdRef.current || ""
-            },
-            "*"
-          );
-          window.opener.focus();
-        }
-      } catch {
-        // ignore opener errors
-      }
       window.close();
       window.setTimeout(() => {
         if (toolsReturnUrl && /^https?:\/\//i.test(toolsReturnUrl)) {
@@ -484,57 +415,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      if ((event.key === USERNAME_STORAGE_KEY || event.key === CLIENT_USER_STORAGE_KEY) && event.newValue) {
-        const incomingUser = String(event.newValue).trim();
-        if (incomingUser && /^[A-Za-z0-9_]{3,24}$/.test(incomingUser) && incomingUser !== clientUserIdRef.current) {
-          clientUserIdRef.current = incomingUser;
-          setUsername(incomingUser);
-          void refreshAll().then(() => setScreen("accounts"));
-        }
-        return;
-      }
-      if (event.key !== AUTH_RESULT_STORAGE_KEY || !event.newValue) return;
-      try {
-        const parsed = JSON.parse(event.newValue);
-        const incomingUser = String(parsed?.username || "").trim();
-        if (incomingUser && /^[A-Za-z0-9_]{3,24}$/.test(incomingUser) && incomingUser !== clientUserIdRef.current) {
-          clientUserIdRef.current = incomingUser;
-          setUsername(incomingUser);
-          window.localStorage.setItem(USERNAME_STORAGE_KEY, incomingUser);
-          window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, incomingUser);
-        }
-      } catch {
-        // ignore parse failures
-      }
-      void refreshAll().then(() => setScreen("accounts"));
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-
-  useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      const payload = event.data;
-      if (!payload || payload.type !== AUTH_MESSAGE_TYPE) return;
-      const incomingUser = String(payload.username || "").trim();
-      if (incomingUser && /^[A-Za-z0-9_]{3,24}$/.test(incomingUser)) {
-        clientUserIdRef.current = incomingUser;
-        setUsername(incomingUser);
-        try {
-          window.localStorage.setItem(USERNAME_STORAGE_KEY, incomingUser);
-          window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, incomingUser);
-        } catch {
-          // ignore storage failures
-        }
-      }
-      void refreshAll().then(() => setScreen("accounts"));
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, []);
-
-  useEffect(() => {
     if (!tierStateReadyRef.current) return;
     const serialized = serializeTierState(tierState);
     if (serialized === lastSavedTierStateRef.current) return;
@@ -552,19 +432,33 @@ function App() {
   }, [tierState]);
 
   async function refreshAll() {
-    if (!clientUserIdRef.current) {
-      setLoading(false);
-      setScreen("setup");
-      return;
-    }
     try {
       const bootstrapResp = await apiFetch("/api/v1/bootstrap");
+      if (bootstrapResp.status === 401) {
+        setAuthMissing(true);
+        setUsername("");
+        setLinkedAccounts([]);
+        setGames([]);
+        setTierState(DEFAULT_TIER_STATE);
+        setScreen("setup");
+        return;
+      }
+      if (!bootstrapResp.ok) {
+        setStatus("Could not load app data.");
+        setScreen("setup");
+        return;
+      }
       const bootstrap = await bootstrapResp.json();
+      const nextUsername = String(bootstrap?.user?.username || bootstrap?.user?.name || bootstrap?.user?.id || "").trim();
       const nextAccounts = (bootstrap?.linkedAccounts ?? []) as LinkedAccount[];
       const nextGames = ((bootstrap?.games ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null }));
       const nextTheme = bootstrap?.theme?.themeId === "light" ? "light" : "dark";
       const nextTierState = bootstrap?.tierListState ?? DEFAULT_TIER_STATE;
 
+      setAuthMissing(false);
+      if (nextUsername) {
+        setUsername(nextUsername);
+      }
       setLinkedAccounts(nextAccounts);
       setGames(nextGames);
       setTierState(nextTierState);
@@ -594,104 +488,14 @@ function App() {
     }
   }
 
-  async function applyUsernameSession(userId: string, nextScreen: Screen) {
-    clientUserIdRef.current = userId;
-    setUsername(userId);
-    try {
-      window.localStorage.setItem(USERNAME_STORAGE_KEY, userId);
-      window.localStorage.setItem(CLIENT_USER_STORAGE_KEY, userId);
-    } catch {
-      // ignore storage access failures
-    }
-    setThemeMode(readStoredTheme(userId));
-    setLoading(true);
-    setScreen(nextScreen);
-    await refreshAll();
-    setScreen(nextScreen);
-  }
-
-  async function createAccount() {
-    const draft = usernameDraft.trim();
-    if (!/^[A-Za-z0-9_]{3,24}$/.test(draft)) {
-      setStatus("Username must be 3-24 chars and use letters, numbers, or _ only.");
-      return;
-    }
-    if (passwordDraft.length < 6 || passwordDraft.length > 128) {
-      setStatus("Password must be 6-128 characters.");
-      return;
-    }
-    setUsernameSaving(true);
-    try {
-      const resp = await fetch(apiUrl("/api/v1/users/create-account"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: draft, password: passwordDraft })
-      });
-      const json = await resp.json().catch(() => null);
-      if (!resp.ok) {
-        setStatus(json?.error || "Could not create account.");
-        return;
-      }
-      await applyUsernameSession(json.user.id, "accounts");
-      setStatus(`Welcome, ${json.user.id}.`);
-      setUsernameDraft("");
-      setPasswordDraft("");
-    } finally {
-      setUsernameSaving(false);
-    }
-  }
-
-  async function loginAccount() {
-    const draft = usernameDraft.trim();
-    if (!/^[A-Za-z0-9_]{3,24}$/.test(draft)) {
-      setStatus("Enter a valid username.");
-      return;
-    }
-    if (passwordDraft.length < 6 || passwordDraft.length > 128) {
-      setStatus("Password must be 6-128 characters.");
-      return;
-    }
-    setUsernameSaving(true);
-    try {
-      const resp = await fetch(apiUrl("/api/v1/users/login"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: draft, password: passwordDraft })
-      });
-      const json = await resp.json().catch(() => null);
-      if (!resp.ok) {
-        setStatus(json?.error || "Login failed.");
-        return;
-      }
-      await applyUsernameSession(json.user.id, "stats");
-      setStatus(`Signed in as ${json.user.id}.`);
-      setUsernameDraft("");
-      setPasswordDraft("");
-    } finally {
-      setUsernameSaving(false);
-    }
+  function goToStudioLogin() {
+    const next = encodeURIComponent(window.location.href);
+    window.location.href = `${STUDIO_WEB_BASE}/login?next=${next}`;
   }
 
   function logoutUsername() {
-    const currentUser = clientUserIdRef.current;
-    clientUserIdRef.current = "";
-    setUsername("");
-    setLinkedAccounts([]);
-    setGames([]);
-    setTierState(DEFAULT_TIER_STATE);
-    setThemeMode("dark");
-    setScreen("setup");
-    setStatus("Logged out.");
-    try {
-      window.localStorage.removeItem(USERNAME_STORAGE_KEY);
-      window.localStorage.removeItem(CLIENT_USER_STORAGE_KEY);
-      window.localStorage.removeItem(POST_AUTH_SCREEN_STORAGE_KEY);
-      if (currentUser) {
-        window.localStorage.removeItem(getThemeStorageKey(currentUser));
-      }
-    } catch {
-      // ignore storage access failures
-    }
+    const next = encodeURIComponent(window.location.href);
+    window.location.href = `${STUDIO_WEB_BASE}/logout?next=${next}`;
   }
 
   async function setMode(mode: ThemeMode) {
@@ -745,24 +549,18 @@ function App() {
   }
 
   function openAuthInNewTab(path: string) {
-    if (!hasUsername || !clientUserIdRef.current) {
+    if (!hasUsername) {
       setScreen("setup");
-      setStatus("Create or log in with a username before connecting Steam.");
+      setStatus("U do not have an account with us.");
       return;
     }
     const authUrl = new URL(apiUrl(path));
-    authUrl.searchParams.set("client_user_id", clientUserIdRef.current);
     authUrl.searchParams.set("frontend_url", window.location.origin);
     authUrl.searchParams.set("auth_popup", "1");
     if (document.referrer && /^https?:\/\//i.test(document.referrer)) {
       authUrl.searchParams.set("tools_return_url", document.referrer);
     }
     const target = authUrl.toString();
-    try {
-      window.localStorage.setItem(POST_AUTH_SCREEN_STORAGE_KEY, screen);
-    } catch {
-      // no-op if storage is unavailable
-    }
     const opened = window.open(target, "_blank");
     if (!opened) {
       try {
@@ -1098,29 +896,9 @@ function App() {
 
       {screen === "setup" && (
         <section className="panel setup-panel">
-          <h2>Setup</h2>
-          <p>Create an account or log in with your username and password.</p>
-          <div className="modal-search">
-            <input
-              value={usernameDraft}
-              onChange={(e) => setUsernameDraft(e.target.value)}
-              placeholder="Username"
-              autoComplete="username"
-            />
-            <input
-              type="password"
-              value={passwordDraft}
-              onChange={(e) => setPasswordDraft(e.target.value)}
-              placeholder="Password"
-              autoComplete="current-password"
-            />
-            <button onClick={() => void createAccount()} disabled={usernameSaving}>
-              {usernameSaving ? "Working..." : "Create Account"}
-            </button>
-            <button onClick={() => void loginAccount()} disabled={usernameSaving}>
-              {usernameSaving ? "Working..." : "Login"}
-            </button>
-          </div>
+          <h2>Account Required</h2>
+          <p>{authMissing ? "U do not have an account with us." : "Sign in with your StudioJPG account to continue."}</p>
+          <button className="primary" onClick={goToStudioLogin}>Go To StudioJPG Login</button>
         </section>
       )}
 
