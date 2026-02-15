@@ -115,6 +115,8 @@ function App() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const dragImageRef = useRef<HTMLElement | null>(null);
+  const dragPointerYRef = useRef<number | null>(null);
+  const autoScrollRafRef = useRef<number | null>(null);
 
   function apiFetch(path: string, init: RequestInit = {}) {
     const requestUrl = new URL(apiUrl(path), window.location.origin);
@@ -152,6 +154,47 @@ function App() {
     const timeout = window.setTimeout(() => setDropFlashTarget(null), 380);
     return () => window.clearTimeout(timeout);
   }, [dropFlashTarget]);
+
+  useEffect(() => {
+    if (!dragGameId) return;
+    const step = () => {
+      const y = dragPointerYRef.current;
+      if (typeof y === "number") {
+        const threshold = 130;
+        const viewport = window.innerHeight;
+        const topDistance = y;
+        const bottomDistance = viewport - y;
+        let delta = 0;
+        if (topDistance < threshold) {
+          const intensity = (threshold - topDistance) / threshold;
+          delta = -Math.max(6, intensity * 24);
+        } else if (bottomDistance < threshold) {
+          const intensity = (threshold - bottomDistance) / threshold;
+          delta = Math.max(6, intensity * 24);
+        }
+        if (delta !== 0) {
+          window.scrollBy({ top: delta, behavior: "auto" });
+        }
+      }
+      autoScrollRafRef.current = window.requestAnimationFrame(step);
+    };
+    autoScrollRafRef.current = window.requestAnimationFrame(step);
+    return () => {
+      if (autoScrollRafRef.current) {
+        window.cancelAnimationFrame(autoScrollRafRef.current);
+      }
+      autoScrollRafRef.current = null;
+    };
+  }, [dragGameId]);
+
+  useEffect(() => {
+    if (!dragGameId || touchDrag) return;
+    const onWindowDragOver = (event: DragEvent) => {
+      dragPointerYRef.current = event.clientY;
+    };
+    window.addEventListener("dragover", onWindowDragOver);
+    return () => window.removeEventListener("dragover", onWindowDragOver);
+  }, [dragGameId, touchDrag]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -457,6 +500,7 @@ function App() {
     setDragOrigin({ target, index });
     setDragOver({ target, index });
     setOriginPlaceholderActive(false);
+    dragPointerYRef.current = e.clientY;
 
     const sourceEl = e.currentTarget;
     const clone = sourceEl.cloneNode(true) as HTMLElement;
@@ -497,6 +541,7 @@ function App() {
       offsetY: e.clientY - rect.top,
       width: rect.width
     });
+    dragPointerYRef.current = e.clientY;
     e.currentTarget.setPointerCapture(e.pointerId);
     e.preventDefault();
   }
@@ -511,6 +556,7 @@ function App() {
     setDragOver(null);
     setOriginPlaceholderActive(false);
     setTouchDrag(null);
+    dragPointerYRef.current = null;
   }
 
   function locationFromPoint(x: number, y: number): DragLocation | null {
@@ -533,6 +579,7 @@ function App() {
   function onTouchPointerMove(e: React.PointerEvent<HTMLElement>) {
     if (!touchDrag || e.pointerType !== "touch" || e.pointerId !== touchDrag.pointerId) return;
     e.preventDefault();
+    dragPointerYRef.current = e.clientY;
     setTouchDrag((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
     setDragOver(locationFromPoint(e.clientX, e.clientY));
   }
@@ -551,6 +598,7 @@ function App() {
   function onRowDragOver(target: DropTarget, e: React.DragEvent<HTMLElement>) {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    dragPointerYRef.current = e.clientY;
     const ids = idsForTarget(target);
     setDragOver({ target, index: ids.length });
   }
@@ -558,6 +606,7 @@ function App() {
   function onCardDragOver(target: DropTarget, index: number, e: React.DragEvent<HTMLElement>) {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    dragPointerYRef.current = e.clientY;
     setDragOver({ target, index });
   }
 
