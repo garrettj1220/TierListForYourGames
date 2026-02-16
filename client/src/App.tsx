@@ -54,10 +54,18 @@ type SearchResult = {
   metadata?: Record<string, unknown>;
 };
 
-const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? "")
-  .trim()
-  .split(/\s+/)[0]
-  .replace(/\/$/, "");
+function normalizeApiBase(rawValue: unknown): string {
+  const firstToken = String(rawValue ?? "")
+    .trim()
+    .split(/\s+/)[0]
+    .replace(/\/+$/, "");
+  if (!firstToken) return "";
+  if (/^https?:\/\//i.test(firstToken)) return firstToken;
+  if (firstToken.startsWith("//")) return `https:${firstToken}`;
+  return `https://${firstToken}`;
+}
+
+const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE_URL);
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const DRAG_EDGE_HYSTERESIS_PX = 7;
