@@ -89,7 +89,7 @@ const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const DRAG_EDGE_HYSTERESIS_PX = 7;
 const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
-const AUTO_SCROLL_HOLD_MS = 900;
+const AUTO_SCROLL_HOLD_MS = 420;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
@@ -170,37 +170,47 @@ function extractCanonicalUsername(payload: any): string {
   return String(rawUser?.username || rawUser?.name || rawUser?.id || rawUser?.user_id || "").trim();
 }
 
-function normalizePlatformName(value: unknown): string {
+function normalizeCreatorName(value: unknown): string {
   const text = String(value ?? "").trim();
   if (!text || text.toLowerCase() === "unknown") return "";
   return text;
 }
 
-function extractPlatformList(item: { platform?: string | null; metadata?: Record<string, unknown> | null }): string[] {
-  const names: string[] = [];
-  const pushName = (value: unknown) => {
-    const next = normalizePlatformName(value);
+function extractCreators(item: { metadata?: Record<string, unknown> | null }): string[] {
+  const creators: string[] = [];
+  const addCreator = (value: unknown) => {
+    const next = normalizeCreatorName(value);
     if (!next) return;
-    if (next.toLowerCase() === "multi-platform") return;
-    if (!names.some((existing) => existing.toLowerCase() === next.toLowerCase())) {
-      names.push(next);
+    if (!creators.some((existing) => existing.toLowerCase() === next.toLowerCase())) {
+      creators.push(next);
     }
   };
 
-  pushName(item.platform);
   const metadata = item.metadata ?? {};
-  const rawGroups = [
-    (metadata as Record<string, unknown>).platforms,
-    (metadata as Record<string, unknown>).igdbPlatforms
+  const creatorCandidates = [
+    (metadata as Record<string, unknown>).creator,
+    (metadata as Record<string, unknown>).studio,
+    (metadata as Record<string, unknown>).developer,
+    (metadata as Record<string, unknown>).publisher
   ];
-  for (const raw of rawGroups) {
+  for (const candidate of creatorCandidates) addCreator(candidate);
+
+  const creatorGroups = [
+    (metadata as Record<string, unknown>).creators,
+    (metadata as Record<string, unknown>).developers,
+    (metadata as Record<string, unknown>).publishers
+  ];
+  for (const raw of creatorGroups) {
     if (!Array.isArray(raw)) continue;
-    for (const platformName of raw) pushName(platformName);
+    for (const name of raw) addCreator(name);
   }
 
-  if (names.length > 0) return names;
-  const fallback = normalizePlatformName(item.platform);
-  return fallback ? [fallback] : ["Unknown"];
+  return creators;
+}
+
+function creatorSummary(item: { metadata?: Record<string, unknown> | null }): string {
+  const creators = extractCreators(item);
+  return creators.length ? creators.join(" • ") : "Unknown creator";
 }
 
 function App() {
@@ -278,9 +288,9 @@ function App() {
     if (!needle) return newestFirst;
     return newestFirst.filter((game) => {
       const title = String(game.title || "").toLowerCase();
-      const platform = extractPlatformList(game).join(" ").toLowerCase();
+      const creator = creatorSummary(game).toLowerCase();
       const genre = String(game.genre || "").toLowerCase();
-      return title.includes(needle) || platform.includes(needle) || genre.includes(needle);
+      return title.includes(needle) || creator.includes(needle) || genre.includes(needle);
     });
   }, [games, gamesSearchQuery]);
 
@@ -424,7 +434,12 @@ function App() {
           }
         }
         if (delta !== 0) {
-          window.scrollBy({ top: delta, behavior: "auto" });
+          const scroller = document.scrollingElement;
+          if (scroller) {
+            scroller.scrollTop += delta;
+          } else {
+            window.scrollBy({ top: delta, behavior: "auto" });
+          }
         }
       }
       autoScrollRafRef.current = window.requestAnimationFrame(step);
@@ -617,11 +632,6 @@ function App() {
   function goToStudioLogin() {
     const loginUrl = `${STUDIO_WEB_BASE}/account?mode=login&next=${encodeURIComponent(APP_BASE_PATH)}`;
     window.location.href = loginUrl;
-  }
-
-  function logoutUsername() {
-    const next = encodeURIComponent(window.location.href);
-    window.location.href = `${STUDIO_WEB_BASE}/logout?next=${next}`;
   }
 
   function goToStudioAccounts() {
@@ -842,26 +852,38 @@ function App() {
   }
 
   async function exportPdf() {
-    const { jsPDF } = await import("jspdf");
-    const doc = new jsPDF({ unit: "pt", format: "a4" });
-    doc.setFontSize(18);
-    doc.text("Tier List Your Games", 40, 40);
-    doc.setFontSize(10);
-    doc.text(`Exported: ${new Date().toLocaleString()}`, 40, 58);
-    let y = 90;
-    for (const tier of TIER_KEYS) {
-      const names = tierState.tiers[tier].map((id) => gameMap.get(id)?.title ?? "Unknown");
-      doc.setFontSize(12);
-      doc.text(`${tier} Tier`, 40, y);
+    try {
+      setStatus("Exporting PDF...");
+      const module = await import("jspdf");
+      const JsPdfCtor: any = (module as any).jsPDF ?? (module as any).default?.jsPDF ?? (module as any).default;
+      if (typeof JsPdfCtor !== "function") {
+        throw new Error("PDF engine unavailable");
+      }
+      const doc = new JsPdfCtor({ unit: "pt", format: "a4" });
+      doc.setFontSize(18);
+      doc.text("Tier List Your Games", 40, 40);
       doc.setFontSize(10);
-      doc.text(names.length ? names.join(", ").slice(0, 180) : "(empty)", 110, y);
-      y += 24;
+      doc.text(`Exported: ${new Date().toLocaleString()}`, 40, 58);
+      let y = 90;
+      for (const tier of TIER_KEYS) {
+        const names = tierState.tiers[tier].map((id) => gameMap.get(id)?.title ?? "Unknown");
+        doc.setFontSize(12);
+        doc.text(`${tier} Tier`, 40, y);
+        doc.setFontSize(10);
+        doc.text(names.length ? names.join(", ").slice(0, 180) : "(empty)", 110, y);
+        y += 24;
+      }
+      doc.setFontSize(12);
+      doc.text("Unranked", 40, y + 8);
+      doc.setFontSize(10);
+      doc.text(tierState.unranked.map((id) => gameMap.get(id)?.title ?? "Unknown").join(", ").slice(0, 180) || "(empty)", 110, y + 8);
+      doc.save("tier-list-your-games.pdf");
+      setStatus("PDF downloaded.");
+    } catch (error) {
+      console.error(error);
+      setStatus("PDF export failed.");
     }
-    doc.setFontSize(12);
-    doc.text("Unranked", 40, y + 8);
-    doc.setFontSize(10);
-    doc.text(tierState.unranked.map((id) => gameMap.get(id)?.title ?? "Unknown").join(", ").slice(0, 180) || "(empty)", 110, y + 8);
-    doc.save("tier-list-your-games.pdf");
+    window.setTimeout(() => setStatus(""), 1400);
   }
 
   if (loading) return <div className="app-shell loading">Loading...</div>;
@@ -968,7 +990,6 @@ function App() {
           <p>{hasUsername ? `@${username}` : "No username yet"}</p>
         </div>
         <div className="header-actions">
-          {hasUsername && <button onClick={logoutUsername}>Log Out</button>}
           <button onClick={() => void setMode(themeMode === "dark" ? "light" : "dark")}>
             {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
           </button>
@@ -1099,7 +1120,7 @@ function App() {
                       )}
                       <div className="game-meta">
                         <strong>{g.title}</strong>
-                        <span>{extractPlatformList(g).join(" • ")}</span>
+                        <span>{creatorSummary(g)}</span>
                       </div>
                       <button className="danger" onClick={() => void removeGame(g.id)}>Remove</button>
                     </article>
@@ -1239,7 +1260,7 @@ function App() {
                 <article key={`${r.sourceKey || r.title}-${r.platform}`} className="search-item">
                   <div>
                     <strong>{r.title}</strong>
-                    <span>{extractPlatformList(r).join(" • ")}</span>
+                    <span>{creatorSummary(r)}</span>
                   </div>
                   <button onClick={() => void addGame(r)}>Add</button>
                 </article>

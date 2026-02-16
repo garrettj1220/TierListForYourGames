@@ -562,7 +562,7 @@ async function externalSearch(query) {
 
   try {
     const appToken = await getIgdbAccessToken(clientId, clientSecret);
-    const body = `fields name,cover.image_id,platforms.name,genres.name; search "${normalized.replace(/"/g, '\\"')}"; limit 20;`;
+    const body = `fields name,cover.image_id,platforms.name,genres.name,involved_companies.company.name,involved_companies.developer,involved_companies.publisher; search "${normalized.replace(/"/g, '\\"')}"; limit 20;`;
     const resp = await fetch("https://api.igdb.com/v4/games", {
       method: "POST",
       headers: {
@@ -579,6 +579,16 @@ async function externalSearch(query) {
       const coverImageId = g?.cover?.image_id || null;
       const platforms = Array.isArray(g?.platforms) ? g.platforms.map((p) => p?.name).filter(Boolean) : [];
       const genres = Array.isArray(g?.genres) ? g.genres.map((genre) => genre?.name).filter(Boolean) : [];
+      const companies = Array.isArray(g?.involved_companies) ? g.involved_companies : [];
+      const developers = companies
+        .filter((entry) => Boolean(entry?.developer))
+        .map((entry) => entry?.company?.name)
+        .filter(Boolean);
+      const publishers = companies
+        .filter((entry) => Boolean(entry?.publisher))
+        .map((entry) => entry?.company?.name)
+        .filter(Boolean);
+      const creators = Array.from(new Set([...developers, ...publishers]));
       return {
         title: g?.name || "Unknown",
         platform: platforms.length <= 1 ? (platforms[0] || "Unknown") : "Multi-platform",
@@ -588,7 +598,7 @@ async function externalSearch(query) {
         source: "igdb",
         externalId: g?.id,
         sourceKey: `igdb:${g?.id}`,
-        metadata: { igdbId: g?.id, coverImageId, platforms }
+        metadata: { igdbId: g?.id, coverImageId, platforms, developers, publishers, creators }
       };
     });
   } catch {
