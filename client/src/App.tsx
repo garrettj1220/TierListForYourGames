@@ -186,6 +186,7 @@ function App() {
   const [status, setStatus] = useState("");
   const [authMissing, setAuthMissing] = useState(false);
   const [guestMode, setGuestMode] = useState(false);
+  const [syncingMissingGames, setSyncingMissingGames] = useState(false);
   const [coverLoadFailures, setCoverLoadFailures] = useState<Record<string, true>>({});
 
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -635,6 +636,41 @@ function App() {
     setSearchQuery("");
   }
 
+  async function syncMissingGamesFromLinkedAccounts() {
+    if (!hasUsername) {
+      setStatus("Sign in required to sync from linked accounts.");
+      return;
+    }
+    const steamConnections = linkedAccounts.filter(
+      (account) => String(account.platform || "").trim().toLowerCase() === "steam" && Boolean(account.id)
+    );
+    if (steamConnections.length === 0) {
+      setStatus("No linked Steam accounts found. Link one on the StudioJPG account page.");
+      return;
+    }
+
+    setSyncingMissingGames(true);
+    let successCount = 0;
+    let failCount = 0;
+    try {
+      for (const connection of steamConnections) {
+        const resp = await apiFetch(`/api/accounts/steam/sync/${connection.id}`, { method: "POST" });
+        if (resp.ok) successCount += 1;
+        else failCount += 1;
+      }
+      await refreshAll();
+      if (failCount > 0) {
+        setStatus(`Synced ${successCount}/${steamConnections.length} linked Steam accounts. ${failCount} failed.`);
+      } else {
+        setStatus(`Synced ${successCount} linked Steam account${successCount === 1 ? "" : "s"}. Missing games imported.`);
+      }
+    } catch {
+      setStatus("Sync failed. Please try again.");
+    } finally {
+      setSyncingMissingGames(false);
+    }
+  }
+
   async function removeGame(gameId: string) {
     if (!hasUsername) {
       setGames((prev) => prev.filter((g) => g.id !== gameId));
@@ -964,7 +1000,12 @@ function App() {
         <section className="panel">
           <div className="row-between">
             <h2>Games</h2>
-            <button className="primary" onClick={() => setAddModalOpen(true)}>Add Game</button>
+            <div className="header-actions">
+              <button onClick={() => void syncMissingGamesFromLinkedAccounts()} disabled={syncingMissingGames || !hasUsername}>
+                {syncingMissingGames ? "Syncing..." : "Sync Missing Games"}
+              </button>
+              <button className="primary" onClick={() => setAddModalOpen(true)}>Add Game</button>
+            </div>
           </div>
           {games.length === 0 ? (
             <p>No games.</p>
