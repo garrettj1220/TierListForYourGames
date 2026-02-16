@@ -113,12 +113,19 @@ async function fetchStudioAuthUser(req) {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Cookie: req.headers.cookie || ""
+        Cookie: req.headers.cookie || "",
+        Authorization: req.headers.authorization || ""
       }
     });
     if (!resp.ok) return null;
     const payload = await resp.json().catch(() => null);
-    const rawUser = payload?.user ?? payload;
+    const rawUser =
+      payload?.user ??
+      payload?.data?.user ??
+      payload?.data ??
+      payload?.result?.user ??
+      payload?.result ??
+      payload;
     const userId = String(rawUser?.user_id || rawUser?.id || "").trim();
     if (!userId) return null;
     const username = String(rawUser?.username || rawUser?.name || userId).trim() || userId;

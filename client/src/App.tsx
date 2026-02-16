@@ -133,6 +133,17 @@ function normalizeConnection(row: Record<string, unknown>): LinkedAccount {
   };
 }
 
+function extractCanonicalUsername(payload: any): string {
+  const rawUser =
+    payload?.user ??
+    payload?.data?.user ??
+    payload?.data ??
+    payload?.result?.user ??
+    payload?.result ??
+    payload;
+  return String(rawUser?.username || rawUser?.name || rawUser?.id || rawUser?.user_id || "").trim();
+}
+
 function App() {
   const initialClientUserId = readStoredUsername();
   const [username, setUsername] = useState(initialClientUserId);
@@ -459,7 +470,14 @@ function App() {
         return;
       }
       const bootstrap = await bootstrapResp.json();
-      const nextUsername = String(bootstrap?.user?.username || bootstrap?.user?.name || bootstrap?.user?.id || "").trim();
+      let nextUsername = extractCanonicalUsername(bootstrap);
+      if (!nextUsername) {
+        const meResp = await apiFetch("/api/tierlist/auth/me");
+        if (meResp.ok) {
+          const me = await meResp.json().catch(() => null);
+          nextUsername = extractCanonicalUsername(me);
+        }
+      }
       const nextGames = ((bootstrap?.games ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null }));
       const nextTheme = bootstrap?.theme?.themeId === "light" ? "light" : "dark";
       const nextTierState = bootstrap?.tierListState ?? DEFAULT_TIER_STATE;
