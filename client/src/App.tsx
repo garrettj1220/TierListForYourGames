@@ -184,11 +184,6 @@ function App() {
   const [touchDrag, setTouchDrag] = useState<TouchDragState | null>(null);
   const [dropFlashTarget, setDropFlashTarget] = useState<DropTarget | null>(null);
   const [status, setStatus] = useState("");
-  const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
-  const [syncingAll, setSyncingAll] = useState(false);
-  const [steamManualOpen, setSteamManualOpen] = useState(false);
-  const [manualSteamId, setManualSteamId] = useState("");
-  const [manualSteamSaving, setManualSteamSaving] = useState(false);
   const [authMissing, setAuthMissing] = useState(false);
   const [guestMode, setGuestMode] = useState(false);
   const [coverLoadFailures, setCoverLoadFailures] = useState<Record<string, true>>({});
@@ -576,6 +571,10 @@ function App() {
     window.location.href = `${STUDIO_WEB_BASE}/logout?next=${next}`;
   }
 
+  function goToStudioAccounts() {
+    window.location.href = `${STUDIO_WEB_BASE}/account`;
+  }
+
   async function setMode(mode: ThemeMode) {
     setThemeMode(mode);
     if (!hasUsername) return;
@@ -584,127 +583,6 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ themeId: mode })
     });
-  }
-
-  async function addSteamManual() {
-    if (!hasUsername) {
-      setStatus("Sign in required for account linking.");
-      return;
-    }
-    if (!manualSteamId.trim()) {
-      setStatus("Enter your SteamID64 first.");
-      return;
-    }
-    setManualSteamSaving(true);
-    try {
-      const resp = await apiFetch("/api/accounts/steam/manual", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ steamId: manualSteamId.trim() })
-      });
-      const json = await resp.json().catch(() => null);
-      if (!resp.ok) {
-        setStatus(json?.error || "Could not add Steam account.");
-        setManualSteamSaving(false);
-        return;
-      }
-      await refreshAll();
-      if (json?.status === "linked_no_key") {
-        setStatus("Steam linked. Add STEAM_WEB_API_KEY to sync games.");
-      } else if (json?.status === "sync_failed") {
-        setStatus("Steam linked, but sync failed. Ensure games list is public.");
-      } else {
-        setStatus("Steam account linked.");
-      }
-      setManualSteamId("");
-      setSteamManualOpen(false);
-    } catch {
-      setStatus("Could not add Steam account.");
-    } finally {
-      setManualSteamSaving(false);
-    }
-  }
-
-  async function removeAccount(accountId: string) {
-    if (!hasUsername) return;
-    const resp = await apiFetch(`/api/accounts/connections/${accountId}`, { method: "DELETE" });
-    if (!resp.ok) return;
-    setLinkedAccounts((prev) => prev.filter((a) => a.id !== accountId));
-  }
-
-  async function openAuthInNewTab() {
-    if (!hasUsername) {
-      setStatus("Sign in required for account linking.");
-      return;
-    }
-    const resp = await apiFetch("/api/accounts/steam/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        frontend_url: window.location.origin,
-        auth_popup: 1,
-        tools_return_url: document.referrer && /^https?:\/\//i.test(document.referrer) ? document.referrer : undefined
-      })
-    });
-    if (!resp.ok) {
-      const error = await resp.json().catch(() => null);
-      setStatus(error?.error || "Could not start Steam connect.");
-      return;
-    }
-    let target = "";
-    try {
-      const json = await resp.clone().json();
-      target = String(json?.url || json?.authUrl || "");
-    } catch {
-      // no-op
-    }
-    if (!target) {
-      target = resp.url;
-    }
-    if (!target) {
-      setStatus("Could not start Steam connect.");
-      return;
-    }
-    const opened = window.open(target, "_blank");
-    if (!opened) {
-      try {
-        if (window.top && window.top !== window.self) {
-          window.top.location.href = "/tools";
-          return;
-        }
-      } catch {
-        // ignore cross-window access errors
-      }
-      window.location.href = target;
-    }
-  }
-
-  async function syncSteamAccount(accountId: string) {
-    if (!hasUsername) return;
-    setSyncingAccountId(accountId);
-    const resp = await apiFetch(`/api/accounts/steam/sync/${accountId}`, { method: "POST" });
-    if (resp.ok) {
-      await refreshAll();
-      setStatus("Steam library synced.");
-    } else {
-      const error = await resp.json().catch(() => null);
-      setStatus(error?.error || "Steam sync failed.");
-    }
-    setSyncingAccountId(null);
-  }
-
-  async function syncAllAccounts() {
-    if (!hasUsername) return;
-    setSyncingAll(true);
-    const steamConnections = linkedAccounts.filter((a) => String(a.platform).toLowerCase() === "steam");
-    let synced = 0;
-    for (const connection of steamConnections) {
-      const resp = await apiFetch(`/api/accounts/steam/sync/${connection.id}`, { method: "POST" });
-      if (resp.ok) synced += 1;
-    }
-    await refreshAll();
-    setStatus(`Scan complete: synced ${synced}/${steamConnections.length} Steam connections.`);
-    setSyncingAll(false);
   }
 
   async function searchGames() {
@@ -1050,24 +928,16 @@ function App() {
         <section className="panel">
           <div className="row-between">
             <h2>Accounts</h2>
-            <button onClick={() => void syncAllAccounts()} disabled={syncingAll}>
-              {syncingAll ? "Checking..." : "Check For New Games"}
-            </button>
+            <button onClick={() => void refreshAll()}>Refresh</button>
           </div>
+          <p className="auth-note">Link and manage Steam on the main StudioJPG account page.</p>
+          <button onClick={goToStudioAccounts}>Manage Accounts on StudioJPG</button>
           <div className="platform-cards">
             {ACCOUNT_PLATFORMS.map((platform) => (
               <article key={platform} className="platform-card">
                 <h3>{platform}</h3>
                 <p>{accountCounts[platform] ? `${accountCounts[platform]} connected` : "Not connected"}</p>
-                {platform === "Steam" ? (
-                  <div className="platform-actions">
-                    <button onClick={() => void openAuthInNewTab()}>Connect</button>
-                    <button onClick={() => setSteamManualOpen(true)}>Add Manually</button>
-                  </div>
-                ) : (
-                  <button disabled>Not Available</button>
-                )}
-                <p className="auth-note">Opens in a new tab for secure sign-in.</p>
+                <button disabled>{platform === "Steam" ? "Managed on StudioJPG" : "Not Available"}</button>
               </article>
             ))}
           </div>
@@ -1082,14 +952,6 @@ function App() {
                   <div>
                     <strong>{a.platform}</strong>
                     <span>{a.accountName}</span>
-                  </div>
-                  <div className="account-actions">
-                    {a.platform === "Steam" && (
-                      <button onClick={() => void syncSteamAccount(a.id)} disabled={syncingAccountId === a.id}>
-                        {syncingAccountId === a.id ? "Syncing..." : "Sync"}
-                      </button>
-                    )}
-                    <button className="danger" onClick={() => void removeAccount(a.id)}>Remove</button>
                   </div>
                 </li>
               ))}
@@ -1255,25 +1117,6 @@ function App() {
                   <button onClick={() => void addGame(r)}>Add</button>
                 </article>
               ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {steamManualOpen && (
-        <div className="modal-backdrop" onClick={() => setSteamManualOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Add Steam Account Manually</h3>
-            <p className="modal-note">Enter your SteamID64. Make sure your account games list is public.</p>
-            <div className="modal-search">
-              <input
-                value={manualSteamId}
-                onChange={(e) => setManualSteamId(e.target.value)}
-                placeholder="SteamID64"
-              />
-              <button onClick={() => void addSteamManual()} disabled={manualSteamSaving}>
-                {manualSteamSaving ? "Adding..." : "Add"}
-              </button>
             </div>
           </div>
         </div>
