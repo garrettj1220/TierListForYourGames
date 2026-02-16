@@ -25,6 +25,7 @@ type Game = {
   popularity: number;
   playtimeMinutes: number;
   coverArtUrl: string | null;
+  metadata?: Record<string, unknown>;
   manuallyAdded: boolean;
 };
 
@@ -169,6 +170,39 @@ function extractCanonicalUsername(payload: any): string {
   return String(rawUser?.username || rawUser?.name || rawUser?.id || rawUser?.user_id || "").trim();
 }
 
+function normalizePlatformName(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (!text || text.toLowerCase() === "unknown") return "";
+  return text;
+}
+
+function extractPlatformList(item: { platform?: string | null; metadata?: Record<string, unknown> | null }): string[] {
+  const names: string[] = [];
+  const pushName = (value: unknown) => {
+    const next = normalizePlatformName(value);
+    if (!next) return;
+    if (next.toLowerCase() === "multi-platform") return;
+    if (!names.some((existing) => existing.toLowerCase() === next.toLowerCase())) {
+      names.push(next);
+    }
+  };
+
+  pushName(item.platform);
+  const metadata = item.metadata ?? {};
+  const rawGroups = [
+    (metadata as Record<string, unknown>).platforms,
+    (metadata as Record<string, unknown>).igdbPlatforms
+  ];
+  for (const raw of rawGroups) {
+    if (!Array.isArray(raw)) continue;
+    for (const platformName of raw) pushName(platformName);
+  }
+
+  if (names.length > 0) return names;
+  const fallback = normalizePlatformName(item.platform);
+  return fallback ? [fallback] : ["Unknown"];
+}
+
 function App() {
   const initialClientUserId = readStoredUsername();
   const [username, setUsername] = useState(initialClientUserId);
@@ -244,7 +278,7 @@ function App() {
     if (!needle) return newestFirst;
     return newestFirst.filter((game) => {
       const title = String(game.title || "").toLowerCase();
-      const platform = String(game.platform || "").toLowerCase();
+      const platform = extractPlatformList(game).join(" ").toLowerCase();
       const genre = String(game.genre || "").toLowerCase();
       return title.includes(needle) || platform.includes(needle) || genre.includes(needle);
     });
@@ -1065,7 +1099,7 @@ function App() {
                       )}
                       <div className="game-meta">
                         <strong>{g.title}</strong>
-                        <span>{g.platform}</span>
+                        <span>{extractPlatformList(g).join(" • ")}</span>
                       </div>
                       <button className="danger" onClick={() => void removeGame(g.id)}>Remove</button>
                     </article>
@@ -1205,7 +1239,7 @@ function App() {
                 <article key={`${r.sourceKey || r.title}-${r.platform}`} className="search-item">
                   <div>
                     <strong>{r.title}</strong>
-                    <span>{r.platform}</span>
+                    <span>{extractPlatformList(r).join(" • ")}</span>
                   </div>
                   <button onClick={() => void addGame(r)}>Add</button>
                 </article>

@@ -33,6 +33,17 @@ function accountKey(platform, accountName, externalUserId) {
 }
 
 function normalizeGameRecord(record) {
+  const rawMetadata = record.metadata;
+  let metadata = {};
+  if (rawMetadata && typeof rawMetadata === "object") {
+    metadata = rawMetadata;
+  } else if (typeof rawMetadata === "string") {
+    try {
+      metadata = JSON.parse(rawMetadata);
+    } catch {
+      metadata = {};
+    }
+  }
   return {
     id: record.id,
     sourceKey: record.source_key ?? record.sourceKey ?? null,
@@ -42,6 +53,7 @@ function normalizeGameRecord(record) {
     popularity: Number(record.popularity ?? 50),
     playtimeMinutes: Number(record.playtime_minutes ?? record.playtimeMinutes ?? 0),
     coverArtUrl: record.cover_art_url ?? record.coverArtUrl ?? null,
+    metadata,
     manuallyAdded: Boolean(record.manually_added ?? record.manuallyAdded ?? false)
   };
 }
@@ -464,7 +476,7 @@ class PgStorage {
         [userId]
       );
       const gamesResult = await client.query(
-        `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, ug.playtime_minutes, ug.manually_added
+        `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, g.metadata, ug.playtime_minutes, ug.manually_added
          FROM user_games ug
          JOIN games_normalized g ON g.id = ug.game_id
          WHERE ug.user_id = $1
@@ -606,7 +618,7 @@ class PgStorage {
 
   async getGames(userId) {
     const result = await this.pool.query(
-      `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, ug.playtime_minutes, ug.manually_added
+      `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, g.metadata, ug.playtime_minutes, ug.manually_added
        FROM user_games ug
        JOIN games_normalized g ON g.id = ug.game_id
        WHERE ug.user_id = $1
@@ -618,7 +630,7 @@ class PgStorage {
 
   async searchCatalog(query) {
     const result = await this.pool.query(
-      `SELECT id, source_key, title, platform, genre, popularity, cover_art_url, 0 AS playtime_minutes, FALSE AS manually_added
+      `SELECT id, source_key, title, platform, genre, popularity, cover_art_url, metadata, 0 AS playtime_minutes, FALSE AS manually_added
        FROM games_normalized
        WHERE title ILIKE $1
        ORDER BY title ASC
@@ -719,6 +731,7 @@ class PgStorage {
         popularity: Number(persistedGame.popularity) || 50,
         playtimeMinutes: 0,
         coverArtUrl: persistedGame.cover_art_url || null,
+        metadata: gameInput.metadata || {},
         manuallyAdded: Boolean(gameInput.manuallyAdded ?? true)
       };
     } catch (error) {
