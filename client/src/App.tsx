@@ -191,6 +191,8 @@ function App() {
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [gamesSearchInput, setGamesSearchInput] = useState("");
+  const [gamesSearchQuery, setGamesSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const dragImageRef = useRef<HTMLElement | null>(null);
@@ -235,6 +237,22 @@ function App() {
     }
     return [...withCover, ...withoutCover];
   }, [tierState.unranked, gameMap, coverLoadFailures]);
+
+  const filteredGames = useMemo(() => {
+    const newestFirst = [...games].reverse();
+    const needle = gamesSearchQuery.trim().toLowerCase();
+    if (!needle) return newestFirst;
+    return newestFirst.filter((game) => {
+      const title = String(game.title || "").toLowerCase();
+      const platform = String(game.platform || "").toLowerCase();
+      const genre = String(game.genre || "").toLowerCase();
+      return title.includes(needle) || platform.includes(needle) || genre.includes(needle);
+    });
+  }, [games, gamesSearchQuery]);
+
+  function applyGamesSearch() {
+    setGamesSearchQuery(gamesSearchInput.trim());
+  }
 
   function gameHasUsableCover(game: Game | undefined, id: string) {
     const raw = String(game?.coverArtUrl ?? "").trim().toLowerCase();
@@ -1010,22 +1028,51 @@ function App() {
           {games.length === 0 ? (
             <p>No games.</p>
           ) : (
-            <div className="game-list">
-              {games.map((g) => (
-                <article key={g.id} className="game-item">
-                  {g.coverArtUrl ? (
-                    <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
-                  ) : (
-                    <div className="cover-fallback cover-fallback-list cover-fallback-empty" aria-label="No cover art" />
-                  )}
-                  <div className="game-meta">
-                    <strong>{g.title}</strong>
-                    <span>{g.platform}</span>
-                  </div>
-                  <button className="danger" onClick={() => void removeGame(g.id)}>Remove</button>
-                </article>
-              ))}
-            </div>
+            <>
+              <input
+                type="search"
+                value={gamesSearchInput}
+                onChange={(e) => setGamesSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  applyGamesSearch();
+                }}
+                placeholder="Search your games..."
+                aria-label="Search your games"
+              />
+              <div className="header-actions">
+                <button onClick={applyGamesSearch}>Search</button>
+                <button
+                  onClick={() => {
+                    setGamesSearchInput("");
+                    setGamesSearchQuery("");
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+              {filteredGames.length === 0 ? (
+                <p>No games match your search.</p>
+              ) : (
+                <div className="game-list">
+                  {filteredGames.map((g) => (
+                    <article key={g.id} className="game-item">
+                      {g.coverArtUrl ? (
+                        <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
+                      ) : (
+                        <div className="cover-fallback cover-fallback-list cover-fallback-empty" aria-label="No cover art" />
+                      )}
+                      <div className="game-meta">
+                        <strong>{g.title}</strong>
+                        <span>{g.platform}</span>
+                      </div>
+                      <button className="danger" onClick={() => void removeGame(g.id)}>Remove</button>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </section>
       )}
@@ -1144,6 +1191,11 @@ function App() {
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  void searchGames();
+                }}
                 placeholder="Search title"
               />
               <button onClick={() => void searchGames()} disabled={searching}>{searching ? "Searching..." : "Search"}</button>
