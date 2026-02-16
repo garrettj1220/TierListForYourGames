@@ -30,6 +30,10 @@ services:
     envVars:
       - key: VITE_API_BASE_URL
         sync: false
+      - key: VITE_APP_BASE_PATH
+        sync: false
+      - key: VITE_STUDIO_WEB_BASE
+        sync: false
     routes:
       - type: rewrite
         source: /*

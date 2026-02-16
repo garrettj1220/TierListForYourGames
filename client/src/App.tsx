@@ -65,7 +65,25 @@ function normalizeApiBase(rawValue: unknown): string {
   return `https://${firstToken}`;
 }
 
-const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE_URL);
+function normalizePathBase(rawValue: unknown, fallback = "/tools/tierlist/"): string {
+  const firstToken = String(rawValue ?? "")
+    .trim()
+    .split(/\s+/)[0];
+  const base = firstToken || fallback;
+  if (/^https?:\/\//i.test(base)) {
+    return base.endsWith("/") ? base : `${base}/`;
+  }
+  const withLeadingSlash = base.startsWith("/") ? base : `/${base}`;
+  return withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
+}
+
+const runtimeApiBase =
+  typeof window !== "undefined"
+    ? (window as Window & { STUDIOJPG_API_BASE?: string }).STUDIOJPG_API_BASE || ""
+    : "";
+const API_BASE = normalizeApiBase(runtimeApiBase || import.meta.env.VITE_API_BASE_URL || "https://api.studiojpg.co");
+const STUDIO_WEB_BASE = normalizeApiBase(import.meta.env.VITE_STUDIO_WEB_BASE || "https://www.studiojpg.co");
+const APP_BASE_PATH = normalizePathBase(import.meta.env.BASE_URL || import.meta.env.VITE_APP_BASE_PATH || "/tools/tierlist/");
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const DRAG_EDGE_HYSTERESIS_PX = 7;
@@ -73,7 +91,6 @@ const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
 const AUTO_SCROLL_HOLD_MS = 900;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
-const STUDIO_WEB_BASE = "https://studiojpg.co";
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
 const USER_DATA_STORAGE_KEY_PREFIX = "tierlist_user_data_";
 
@@ -173,6 +190,7 @@ function App() {
   const [manualSteamId, setManualSteamId] = useState("");
   const [manualSteamSaving, setManualSteamSaving] = useState(false);
   const [authMissing, setAuthMissing] = useState(false);
+  const [guestMode, setGuestMode] = useState(false);
   const [coverLoadFailures, setCoverLoadFailures] = useState<Record<string, true>>({});
 
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -191,6 +209,7 @@ function App() {
   const lastSavedTierStateRef = useRef(serializeTierState(DEFAULT_TIER_STATE));
   const workspaceHydratedRef = useRef(false);
   const hasUsername = Boolean(username);
+  const canUseApp = hasUsername || guestMode;
 
   function apiFetch(path: string, init: RequestInit = {}) {
     const requestUrl = new URL(apiUrl(path), window.location.origin);
@@ -465,16 +484,26 @@ function App() {
       const bootstrapResp = await apiFetch("/api/tierlist/bootstrap");
       if (bootstrapResp.status === 401) {
         setAuthMissing(true);
+        setGuestMode(true);
         setUsername("");
         setLinkedAccounts([]);
         setGames([]);
         setTierState(DEFAULT_TIER_STATE);
-        setScreen("setup");
+        setStatus("Guest mode: signed out. Sign in to sync/save to cloud.");
+        setScreen("stats");
         return;
       }
       if (!bootstrapResp.ok) {
-        setStatus("Could not load app data.");
-        setScreen("setup");
+        let detail = "";
+        try {
+          const text = (await bootstrapResp.text()).trim();
+          detail = text ? ` ${text.slice(0, 120)}` : "";
+        } catch {
+          // ignore read errors
+        }
+        setGuestMode(true);
+        setStatus(`Guest mode: API bootstrap failed (${bootstrapResp.status}).${detail}`);
+        setScreen("stats");
         return;
       }
       const bootstrap = await bootstrapResp.json();
@@ -497,6 +526,7 @@ function App() {
       const nextAccounts = rawConnections.map(normalizeConnection).filter((a) => a.id);
 
       setAuthMissing(false);
+      setGuestMode(false);
       if (nextUsername) {
         setUsername(nextUsername);
       }
@@ -513,6 +543,13 @@ function App() {
   }
 
   async function saveTierList(stateOverride?: TierListState, silent = false) {
+    if (!hasUsername) {
+      if (!silent) {
+        setStatus("Saved locally (guest mode). Sign in to save to cloud.");
+        setTimeout(() => setStatus(""), 1400);
+      }
+      return;
+    }
     if (!silent) setStatus("Saving...");
     const source = stateOverride ?? tierState;
     const resp = await apiFetch("/api/tierlist/tier-list/state", {
@@ -530,7 +567,8 @@ function App() {
   }
 
   function goToStudioLogin() {
-    window.location.href = `/account?mode=login&next=${encodeURIComponent("/tierlist")}`;
+    const loginUrl = `${STUDIO_WEB_BASE}/account?mode=login&next=${encodeURIComponent(APP_BASE_PATH)}`;
+    window.location.href = loginUrl;
   }
 
   function logoutUsername() {
@@ -540,6 +578,7 @@ function App() {
 
   async function setMode(mode: ThemeMode) {
     setThemeMode(mode);
+    if (!hasUsername) return;
     await apiFetch("/api/tierlist/users/me/theme", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -548,6 +587,10 @@ function App() {
   }
 
   async function addSteamManual() {
+    if (!hasUsername) {
+      setStatus("Sign in required for account linking.");
+      return;
+    }
     if (!manualSteamId.trim()) {
       setStatus("Enter your SteamID64 first.");
       return;
@@ -583,6 +626,7 @@ function App() {
   }
 
   async function removeAccount(accountId: string) {
+    if (!hasUsername) return;
     const resp = await apiFetch(`/api/accounts/connections/${accountId}`, { method: "DELETE" });
     if (!resp.ok) return;
     setLinkedAccounts((prev) => prev.filter((a) => a.id !== accountId));
@@ -590,8 +634,7 @@ function App() {
 
   async function openAuthInNewTab() {
     if (!hasUsername) {
-      setScreen("setup");
-      setStatus("U do not have an account with us.");
+      setStatus("Sign in required for account linking.");
       return;
     }
     const resp = await apiFetch("/api/accounts/steam/start", {
@@ -637,6 +680,7 @@ function App() {
   }
 
   async function syncSteamAccount(accountId: string) {
+    if (!hasUsername) return;
     setSyncingAccountId(accountId);
     const resp = await apiFetch(`/api/accounts/steam/sync/${accountId}`, { method: "POST" });
     if (resp.ok) {
@@ -650,6 +694,7 @@ function App() {
   }
 
   async function syncAllAccounts() {
+    if (!hasUsername) return;
     setSyncingAll(true);
     const steamConnections = linkedAccounts.filter((a) => String(a.platform).toLowerCase() === "steam");
     let synced = 0;
@@ -663,6 +708,10 @@ function App() {
   }
 
   async function searchGames() {
+    if (!hasUsername) {
+      setStatus("Sign in required for external game metadata search.");
+      return;
+    }
     if (searchQuery.trim().length < 2) {
       setStatus("Search needs at least 2 characters.");
       return;
@@ -681,6 +730,10 @@ function App() {
   }
 
   async function addGame(result: SearchResult) {
+    if (!hasUsername) {
+      setStatus("Sign in required to add synced games.");
+      return;
+    }
     const resp = await apiFetch("/api/tierlist/games/manual", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -705,6 +758,23 @@ function App() {
   }
 
   async function removeGame(gameId: string) {
+    if (!hasUsername) {
+      setGames((prev) => prev.filter((g) => g.id !== gameId));
+      setTierState((prev) => ({
+        ...prev,
+        unranked: prev.unranked.filter((id) => id !== gameId),
+        tiers: {
+          S: prev.tiers.S.filter((id) => id !== gameId),
+          A: prev.tiers.A.filter((id) => id !== gameId),
+          B: prev.tiers.B.filter((id) => id !== gameId),
+          C: prev.tiers.C.filter((id) => id !== gameId),
+          D: prev.tiers.D.filter((id) => id !== gameId),
+          F: prev.tiers.F.filter((id) => id !== gameId)
+        }
+      }));
+      setStatus("Removed locally (guest mode).");
+      return;
+    }
     const resp = await apiFetch("/api/tierlist/games/remove", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -944,17 +1014,17 @@ function App() {
 
       <nav className="app-nav">
         <button
-          className={(hasUsername ? screen === "stats" : screen === "setup") ? "active" : ""}
-          onClick={() => setScreen(hasUsername ? "stats" : "setup")}
+          className={(canUseApp ? screen === "stats" : screen === "setup") ? "active" : ""}
+          onClick={() => setScreen(canUseApp ? "stats" : "setup")}
         >
-          {hasUsername ? "Stats" : "Setup"}
+          {canUseApp ? "Stats" : "Setup"}
         </button>
-        <button className={screen === "accounts" ? "active" : ""} onClick={() => setScreen("accounts")} disabled={!hasUsername}>Accounts</button>
-        <button className={screen === "games" ? "active" : ""} onClick={() => setScreen("games")} disabled={!hasUsername}>Games</button>
-        <button className={screen === "editor" ? "active" : ""} onClick={() => setScreen("editor")} disabled={!hasUsername}>Tier List</button>
+        <button className={screen === "accounts" ? "active" : ""} onClick={() => setScreen("accounts")} disabled={!canUseApp}>Accounts</button>
+        <button className={screen === "games" ? "active" : ""} onClick={() => setScreen("games")} disabled={!canUseApp}>Games</button>
+        <button className={screen === "editor" ? "active" : ""} onClick={() => setScreen("editor")} disabled={!canUseApp}>Tier List</button>
       </nav>
 
-      {screen === "setup" && (
+      {screen === "setup" && !canUseApp && (
         <section className="panel setup-panel">
           <h2>Account Required</h2>
           <p>{authMissing ? "U do not have an account with us." : "Sign in with your StudioJPG account to continue."}</p>
@@ -962,14 +1032,17 @@ function App() {
         </section>
       )}
 
-      {screen === "stats" && hasUsername && (
+      {screen === "stats" && canUseApp && (
         <section className="panel setup-panel">
-          <h2>Stats</h2>
+          <h2>{guestMode ? "Guest Mode" : "Stats"}</h2>
+          {guestMode && (
+            <p>Cloud sync unavailable right now. You can still browse and rank locally.</p>
+          )}
           <div className="setup-stats">
             <div><strong>{games.length}</strong><span>Games</span></div>
             <div><strong>{linkedAccounts.length}</strong><span>Accounts</span></div>
           </div>
-          <button className="primary" onClick={() => setScreen("accounts")}>Go to Accounts</button>
+          <button className="primary" onClick={() => setScreen("accounts")}>{guestMode ? "Open Accounts" : "Go to Accounts"}</button>
         </section>
       )}
 
