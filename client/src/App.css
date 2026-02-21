@@ -721,16 +721,41 @@ button.danger:hover {
 .pdf-export-sheet .tier-item-slot {
   flex: 0 0 var(--pdf-card-width);
   min-width: var(--pdf-card-width);
+  max-width: var(--pdf-card-width);
   width: var(--pdf-card-width);
 }
 
 .pdf-export-sheet .tier-game {
+  box-sizing: border-box;
   padding: 6px;
   gap: 5px;
+  overflow: hidden;
 }
 
 .pdf-export-sheet .tier-game span {
   font-size: 0.72rem;
+  line-height: 1.1;
+  min-height: calc(2 * 1.1em);
+  max-height: calc(2 * 1.1em);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.pdf-export-sheet .tier-game img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 264 / 374;
+  object-fit: cover;
+}
+
+.pdf-export-sheet .cover-fallback-tier {
+  display: block;
+  width: 100%;
+  aspect-ratio: 264 / 374;
 }
 
 @media (max-width: 760px) {

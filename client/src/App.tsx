@@ -123,10 +123,13 @@ const PDF_TIER_STACK_GAP_PX = 7;
 const PDF_TIER_ROW_BASE_PX = 54;
 const PDF_TIER_ROW_GAP_PX = 8;
 const PDF_CARD_ASPECT_RATIO = 374 / 264;
-const PDF_CARD_TEXT_HEIGHT_PX = 28;
+const PDF_CARD_BODY_VERTICAL_PX = 14;
+const PDF_TITLE_LINES = 2;
+const PDF_TITLE_LINE_HEIGHT_PX = 11;
+const PDF_ROW_SAFE_BUFFER_PX = 4;
 const PDF_TITLE_BLOCK_PX = 62;
 const PDF_DATE_BLOCK_PX = 24;
-const PDF_MIN_CARD_WIDTH = 60;
+const PDF_MIN_CARD_WIDTH = 72;
 const PDF_MAX_CARDS_PER_ROW = 20;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
@@ -191,8 +194,10 @@ function computeTierRowCount(tierGameCount: number, cardsPerRow: number): number
 
 function estimateTierBlockHeight(tierGameCount: number, cardsPerRow: number, cardWidth: number): number {
   const rows = computeTierRowCount(tierGameCount, cardsPerRow);
-  const cardHeight = Math.max(1, cardWidth * PDF_CARD_ASPECT_RATIO + PDF_CARD_TEXT_HEIGHT_PX);
-  const cardsStackHeight = rows * cardHeight + Math.max(0, rows - 1) * PDF_TIER_ROW_GAP_PX;
+  const cardVisualHeight = Math.max(1, cardWidth * PDF_CARD_ASPECT_RATIO);
+  const titleBlockHeight = PDF_TITLE_LINES * PDF_TITLE_LINE_HEIGHT_PX;
+  const cardOuterHeight = cardVisualHeight + titleBlockHeight + PDF_CARD_BODY_VERTICAL_PX;
+  const cardsStackHeight = rows * cardOuterHeight + Math.max(0, rows - 1) * PDF_TIER_ROW_GAP_PX + PDF_ROW_SAFE_BUFFER_PX * rows;
   return Math.ceil(PDF_TIER_ROW_BASE_PX + cardsStackHeight);
 }
 
@@ -1319,6 +1324,29 @@ function App() {
     return tokens;
   }
 
+  async function waitForExportAssets(pageNode: HTMLElement, timeoutMs = 4000) {
+    const docWithFonts = document as Document & { fonts?: { ready: Promise<unknown> } };
+    const fontReady = docWithFonts.fonts?.ready;
+    const images = Array.from(pageNode.querySelectorAll("img"));
+    const imageWaits = images.map((img) => {
+      if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+      if (typeof img.decode === "function") {
+        return img.decode().catch(() => undefined);
+      }
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          img.removeEventListener("load", done);
+          img.removeEventListener("error", done);
+          resolve();
+        };
+        img.addEventListener("load", done, { once: true });
+        img.addEventListener("error", done, { once: true });
+      });
+    });
+    const settlePromise = Promise.all([...(fontReady ? [fontReady] : []), ...imageWaits]).then(() => undefined);
+    await Promise.race([settlePromise, new Promise<void>((resolve) => window.setTimeout(resolve, timeoutMs))]);
+  }
+
   async function exportPdf() {
     if (pdfExporting) return;
     const normalizedTitle = pdfTitleInput.trim() || defaultPdfTitle(username);
@@ -1349,6 +1377,7 @@ function App() {
       for (let pageIndex = 0; pageIndex < sheets.length; pageIndex += 1) {
         const pageNode = pdfExportPageRefs.current[pageIndex];
         if (!pageNode) throw new Error(`PDF export surface missing for page ${pageIndex + 1}`);
+        await waitForExportAssets(pageNode);
         const canvas = await html2canvasFn(pageNode, {
           scale: Math.max(2, window.devicePixelRatio || 1),
           backgroundColor,
