@@ -1236,56 +1236,6 @@ function App() {
     setTierState((prev) => ({ ...prev, unranked: Array.from(new Set([gameId, ...prev.unranked])) }));
   }
 
-  async function backfillMissingGameCovers() {
-    if (!hasUsername) {
-      setStatus("Sign in required to fetch missing cover art.");
-      return;
-    }
-    const targetIds = games
-      .filter((game) => !gameHasUsableCover(game, game.id))
-      .map((game) => game.id);
-    if (targetIds.length === 0) {
-      setStatus("No missing or failed covers detected.");
-      window.setTimeout(() => setStatus(""), 1400);
-      return;
-    }
-    setStatus(`Checking ${targetIds.length} game covers...`);
-    const resp = await apiFetch("/api/tierlist/games/backfill-covers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ gameIds: targetIds })
-    });
-    if (!resp.ok) {
-      setStatus("Cover refresh failed.");
-      window.setTimeout(() => setStatus(""), 1600);
-      return;
-    }
-    const json = await resp.json().catch(() => null);
-    const updatedGames = Array.isArray(json?.games) ? (json.games as Game[]) : [];
-    if (updatedGames.length > 0) {
-      const updatedMap = new Map(updatedGames.map((game) => [game.id, game]));
-      setGames((prev) =>
-        prev.map((game) => {
-          const next = updatedMap.get(game.id);
-          if (!next) return game;
-          return { ...game, coverArtUrl: assetUrl(next.coverArtUrl) ?? null, metadata: next.metadata ?? game.metadata };
-        })
-      );
-      setCoverLoadFailures((prev) => {
-        const next = { ...prev };
-        for (const game of updatedGames) {
-          if (!game.coverArtUrl) continue;
-          delete next[game.id];
-        }
-        return next;
-      });
-    }
-    const scanned = Number(json?.scanned || targetIds.length);
-    const updated = Number(json?.updated || updatedGames.length);
-    setStatus(updated > 0 ? `Updated ${updated}/${scanned} covers.` : `No better covers found for ${scanned} games.`);
-    window.setTimeout(() => setStatus(""), 1800);
-  }
-
   function quickMoveGameToTier(gameId: string, tier: QuickMoveTier) {
     setTierState((prev) => {
       const next: TierListState = {
@@ -1645,9 +1595,6 @@ function App() {
                 <>
                   <button onClick={() => void syncMissingGamesFromLinkedAccounts()} disabled={syncingMissingGames || !hasUsername}>
                     {syncingMissingGames ? "Syncing..." : "Sync Missing Games"}
-                  </button>
-                  <button onClick={() => void backfillMissingGameCovers()} disabled={!hasUsername}>
-                    Fix Missing Covers
                   </button>
                   <button className="primary" onClick={() => setAddModalOpen(true)}>Add Game</button>
                   <button onClick={() => setGamesTab("removed")}>Removed Games ({removedGames.length})</button>
