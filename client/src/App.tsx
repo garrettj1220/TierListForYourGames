@@ -1120,7 +1120,6 @@ function App() {
                       )}
                       <div className="game-meta">
                         <strong>{g.title}</strong>
-                        <span>{creatorSummary(g)}</span>
                       </div>
                       <button className="danger" onClick={() => void removeGame(g.id)}>Remove</button>
                     </article>
@@ -1260,7 +1259,6 @@ function App() {
                 <article key={`${r.sourceKey || r.title}-${r.platform}`} className="search-item">
                   <div>
                     <strong>{r.title}</strong>
-                    <span>{creatorSummary(r)}</span>
                   </div>
                   <button onClick={() => void addGame(r)}>Add</button>
                 </article>
