@@ -109,6 +109,7 @@ const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
 const USER_DATA_STORAGE_KEY_PREFIX = "tierlist_user_data_";
+const PDF_PREFS_STORAGE_KEY_PREFIX = "tierlist_pdf_prefs_";
 
 function readStoredUsername() {
   return "";
@@ -135,6 +136,28 @@ function getUserDataStorageKey(userId: string) {
 
 function getThemeStorageKey(userId: string) {
   return `${THEME_STORAGE_KEY_PREFIX}${userId}`;
+}
+
+function getPdfPrefsStorageKey(userId: string) {
+  return `${PDF_PREFS_STORAGE_KEY_PREFIX}${userId}`;
+}
+
+function defaultPdfTitle(username: string) {
+  const name = String(username || "").trim() || "User";
+  return `${name}'s All Time Tierlist of Games`;
+}
+
+function formatDateOnly(value: Date): string {
+  const mm = String(value.getMonth() + 1).padStart(2, "0");
+  const dd = String(value.getDate()).padStart(2, "0");
+  const yyyy = String(value.getFullYear());
+  return `${mm}/${dd}/${yyyy}`;
+}
+
+function sanitizePdfFileName(title: string): string {
+  const trimmed = String(title || "").trim();
+  const safe = trimmed.replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim();
+  return safe || "tier-list";
 }
 
 function readStoredTheme(userId: string): ThemeMode {
@@ -254,6 +277,10 @@ function App() {
   const [gamesSearchQuery, setGamesSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [pdfTitleInput, setPdfTitleInput] = useState("");
+  const [pdfIncludeDate, setPdfIncludeDate] = useState(true);
+  const [pdfExporting, setPdfExporting] = useState(false);
   const [cardMenu, setCardMenu] = useState<{ gameId: string; x: number; y: number } | null>(null);
   const dragImageRef = useRef<HTMLElement | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
@@ -265,6 +292,7 @@ function App() {
   const dragGameIdRef = useRef<string | null>(null);
   const dragOriginRef = useRef<DragLocation | null>(null);
   const dragOverRef = useRef<DragLocation | null>(null);
+  const pdfExportSurfaceRef = useRef<HTMLDivElement | null>(null);
   const pendingPointerRef = useRef<DragPointer | null>(null);
   const lastResolvedPointerRef = useRef<DragPointer | null>(null);
   const lastStableLocationRef = useRef<DragLocation | null>(null);
@@ -324,6 +352,44 @@ function App() {
       return title.includes(needle) || creator.includes(needle) || genre.includes(needle);
     });
   }, [games, gamesSearchQuery]);
+
+  const pdfPreviewTitle = pdfTitleInput.trim() || defaultPdfTitle(username);
+
+  function readStoredPdfPrefs(userId: string): { title: string; includeDate: boolean } | null {
+    try {
+      const raw = window.localStorage.getItem(getPdfPrefsStorageKey(userId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      return {
+        title: String(parsed.title || "").trim(),
+        includeDate: Boolean(parsed.includeDate)
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStoredPdfPrefs(userId: string, prefs: { title: string; includeDate: boolean }) {
+    try {
+      window.localStorage.setItem(getPdfPrefsStorageKey(userId), JSON.stringify(prefs));
+    } catch {
+      // ignore storage access failures
+    }
+  }
+
+  function openPdfModal() {
+    const userKey = username || "guest";
+    const stored = readStoredPdfPrefs(userKey);
+    setPdfTitleInput(stored?.title || defaultPdfTitle(username));
+    setPdfIncludeDate(stored?.includeDate ?? true);
+    setPdfModalOpen(true);
+  }
+
+  function closePdfModal() {
+    if (pdfExporting) return;
+    setPdfModalOpen(false);
+  }
 
   function applyGamesSearch() {
     setGamesSearchQuery(gamesSearchInput.trim());
@@ -1096,38 +1162,44 @@ function App() {
   }
 
   async function exportPdf() {
+    if (pdfExporting) return;
+    const normalizedTitle = pdfTitleInput.trim() || defaultPdfTitle(username);
+    setPdfTitleInput(normalizedTitle);
+    setPdfExporting(true);
     try {
       setStatus("Exporting PDF...");
-      const module = await import("jspdf");
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+      const surface = pdfExportSurfaceRef.current;
+      if (!surface) {
+        throw new Error("PDF export surface not ready");
+      }
+      const [{ default: html2canvas }, module] = await Promise.all([import("html2canvas"), import("jspdf")]);
+      const canvas = await html2canvas(surface, {
+        scale: Math.max(2, window.devicePixelRatio || 1),
+        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#090c12",
+        useCORS: true,
+        logging: false
+      });
       const JsPdfCtor: any = (module as any).jsPDF ?? (module as any).default?.jsPDF ?? (module as any).default;
       if (typeof JsPdfCtor !== "function") {
         throw new Error("PDF engine unavailable");
       }
-      const doc = new JsPdfCtor({ unit: "pt", format: "a4" });
-      doc.setFontSize(18);
-      doc.text("Tier List Your Games", 40, 40);
-      doc.setFontSize(10);
-      doc.text(`Exported: ${new Date().toLocaleString()}`, 40, 58);
-      let y = 90;
-      for (const tier of TIER_KEYS) {
-        const names = tierState.tiers[tier].map((id) => gameMap.get(id)?.title ?? "Unknown");
-        doc.setFontSize(12);
-        doc.text(`${tier} Tier`, 40, y);
-        doc.setFontSize(10);
-        doc.text(names.length ? names.join(", ").slice(0, 180) : "(empty)", 110, y);
-        y += 24;
-      }
-      doc.setFontSize(12);
-      doc.text("Unranked", 40, y + 8);
-      doc.setFontSize(10);
-      doc.text(tierState.unranked.map((id) => gameMap.get(id)?.title ?? "Unknown").join(", ").slice(0, 180) || "(empty)", 110, y + 8);
-      doc.save("tier-list-your-games.pdf");
+      const orientation = canvas.width >= canvas.height ? "landscape" : "portrait";
+      const doc = new JsPdfCtor({ orientation, unit: "px", format: [canvas.width, canvas.height] });
+      const imageData = canvas.toDataURL("image/png");
+      doc.addImage(imageData, "PNG", 0, 0, canvas.width, canvas.height, undefined, "FAST");
+      doc.setProperties({ title: normalizedTitle });
+      doc.save(`${sanitizePdfFileName(normalizedTitle)}.pdf`);
+      writeStoredPdfPrefs(username || "guest", { title: normalizedTitle, includeDate: pdfIncludeDate });
+      setPdfModalOpen(false);
       setStatus("PDF downloaded.");
     } catch (error) {
       console.error(error);
       setStatus("PDF export failed.");
+    } finally {
+      setPdfExporting(false);
+      window.setTimeout(() => setStatus(""), 1400);
     }
-    window.setTimeout(() => setStatus(""), 1400);
   }
 
   if (loading) return <div className="app-shell loading">Loading...</div>;
@@ -1210,7 +1282,7 @@ function App() {
           <button onClick={() => void setMode(themeMode === "dark" ? "light" : "dark")}>
             {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
           </button>
-          <button onClick={() => void exportPdf()}>Export PDF</button>
+          <button onClick={openPdfModal}>Export PDF</button>
         </div>
       </header>
 
@@ -1458,6 +1530,40 @@ function App() {
         </section>
       )}
 
+      {pdfModalOpen && (
+        <div className="modal-backdrop" onClick={closePdfModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Export PDF</h3>
+            <p className="modal-note">Choose a title and whether to include today&apos;s date.</p>
+            <input
+              value={pdfTitleInput}
+              onChange={(e) => setPdfTitleInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                void exportPdf();
+              }}
+              placeholder={defaultPdfTitle(username)}
+              aria-label="PDF title"
+            />
+            <label className="pdf-date-toggle">
+              <input
+                type="checkbox"
+                checked={pdfIncludeDate}
+                onChange={(e) => setPdfIncludeDate(e.target.checked)}
+              />
+              <span>Dated (MM/DD/YYYY)</span>
+            </label>
+            <div className="header-actions">
+              <button onClick={closePdfModal} disabled={pdfExporting}>Cancel</button>
+              <button className="primary" onClick={() => void exportPdf()} disabled={pdfExporting}>
+                {pdfExporting ? "Exporting..." : "Export"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {addModalOpen && (
         <div className="modal-backdrop" onClick={() => setAddModalOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -1488,6 +1594,40 @@ function App() {
           </div>
         </div>
       )}
+
+      <div className="pdf-export-root" aria-hidden="true">
+        <div ref={pdfExportSurfaceRef} className="pdf-export-sheet panel">
+          <h1 className="pdf-export-title">{pdfPreviewTitle}</h1>
+          <div className="tier-wrap">
+            {TIER_KEYS.map((tier) => (
+              <section key={`pdf-${tier}`} className={`tier-row tier-${tier}`}>
+                <header>
+                  <span className="tier-label">{tier}</span>
+                </header>
+                <div className={`tier-cards tier-cards-ranked ${tierState.tiers[tier].length === 0 ? "is-empty" : ""}`}>
+                  {tierState.tiers[tier].map((id) => {
+                    const game = gameMap.get(id);
+                    if (!game) return null;
+                    return (
+                      <div key={`pdf-${tier}-${id}`} className="tier-item-slot">
+                        <article className="tier-game">
+                          {gameHasUsableCover(game, id) ? (
+                            <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
+                          ) : (
+                            <div className="cover-fallback cover-fallback-tier cover-fallback-empty" aria-label="No cover art" />
+                          )}
+                          <span>{game.title}</span>
+                        </article>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+          {pdfIncludeDate && <p className="pdf-export-date">{formatDateOnly(new Date())}</p>}
+        </div>
+      </div>
 
       {touchDrag && dragGameId && gameMap.get(dragGameId) && (
         <div
