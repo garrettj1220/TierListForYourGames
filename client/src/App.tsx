@@ -3,10 +3,20 @@ import "./App.css";
 
 type Screen = "setup" | "stats" | "accounts" | "games" | "editor";
 type TierKey = "S" | "A" | "B" | "C" | "D" | "F";
-type QuickMoveTier = "A" | "B" | "C" | "D" | "F";
+type QuickMoveTier = TierKey;
 type ThemeMode = "dark" | "light";
 type DropTarget = TierKey | "UNRANKED";
 type DragLocation = { target: DropTarget; index: number };
+type DragPointer = { x: number; y: number };
+type TierSlotRect = {
+  index: number;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  midX: number;
+  midY: number;
+};
 type TouchDragState = {
   pointerId: number;
   pointerType: string;
@@ -88,9 +98,11 @@ const API_BASE = normalizeApiBase(runtimeApiBase || import.meta.env.VITE_API_BAS
 const STUDIO_WEB_BASE = normalizeApiBase(import.meta.env.VITE_STUDIO_WEB_BASE || "https://www.studiojpg.co");
 const APP_BASE_PATH = normalizePathBase(import.meta.env.BASE_URL || import.meta.env.VITE_APP_BASE_PATH || "/tools/tierlist/");
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
-const QUICK_MOVE_TIERS: QuickMoveTier[] = ["A", "B", "C", "D", "F"];
+const QUICK_MOVE_TIERS: QuickMoveTier[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
-const DRAG_EDGE_HYSTERESIS_PX = 7;
+const REORDER_DEADBAND_PX = 12;
+const REORDER_ROW_MERGE_PX = 28;
+const REORDER_ROW_OUTSIDE_BUFFER_PX = 24;
 const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
 const AUTO_SCROLL_HOLD_MS = 260;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
@@ -248,8 +260,22 @@ function App() {
   const autoScrollEdgeEnteredAtRef = useRef<number | null>(null);
   const autoScrollEdgeDirectionRef = useRef<-1 | 0 | 1>(0);
   const autoScrollRafRef = useRef<number | null>(null);
+  const dragResolveRafRef = useRef<number | null>(null);
+  const slotRefreshRafRef = useRef<number | null>(null);
   const dragGameIdRef = useRef<string | null>(null);
+  const dragOriginRef = useRef<DragLocation | null>(null);
   const dragOverRef = useRef<DragLocation | null>(null);
+  const pendingPointerRef = useRef<DragPointer | null>(null);
+  const lastResolvedPointerRef = useRef<DragPointer | null>(null);
+  const lastStableLocationRef = useRef<DragLocation | null>(null);
+  const tierSlotRectsRef = useRef<Record<TierKey, TierSlotRect[]>>({
+    S: [],
+    A: [],
+    B: [],
+    C: [],
+    D: [],
+    F: []
+  });
   const touchDragRef = useRef<TouchDragState | null>(null);
   const tierAutosaveTimeoutRef = useRef<number | null>(null);
   const tierStateReadyRef = useRef(false);
@@ -361,8 +387,128 @@ function App() {
   }, [dragGameId]);
 
   useEffect(() => {
+    dragOriginRef.current = dragOrigin;
+  }, [dragOrigin]);
+
+  useEffect(() => {
     touchDragRef.current = touchDrag;
   }, [touchDrag]);
+
+  function toNoDragIndex(target: DropTarget, fullIndex: number) {
+    const origin = dragOriginRef.current;
+    if (origin?.target !== target) return fullIndex;
+    return origin.index < fullIndex ? fullIndex - 1 : fullIndex;
+  }
+
+  function toFullIndex(target: DropTarget, noDragIndex: number) {
+    const origin = dragOriginRef.current;
+    if (origin?.target !== target) return noDragIndex;
+    return origin.index <= noDragIndex ? noDragIndex + 1 : noDragIndex;
+  }
+
+  function captureTierSlotRects() {
+    const next: Record<TierKey, TierSlotRect[]> = { S: [], A: [], B: [], C: [], D: [], F: [] };
+    for (const tier of TIER_KEYS) {
+      const rowEl = document.querySelector<HTMLElement>(`[data-drop-row='true'][data-target='${tier}']`);
+      if (!rowEl) continue;
+      const cardEls = Array.from(rowEl.querySelectorAll<HTMLElement>(`[data-drop-card='true'][data-target='${tier}']`));
+      next[tier] = cardEls.map((el, index) => {
+        const rect = el.getBoundingClientRect();
+        return {
+          index,
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+          midX: rect.left + rect.width / 2,
+          midY: rect.top + rect.height / 2
+        };
+      });
+    }
+    tierSlotRectsRef.current = next;
+  }
+
+  function scheduleTierSlotRectRefresh() {
+    if (slotRefreshRafRef.current) return;
+    slotRefreshRafRef.current = window.requestAnimationFrame(() => {
+      slotRefreshRafRef.current = null;
+      if (!dragGameIdRef.current) return;
+      captureTierSlotRects();
+    });
+  }
+
+  function computeSameTierNoDragIndex(target: TierKey, x: number, y: number): number {
+    const slots = tierSlotRectsRef.current[target];
+    if (!slots.length) return 0;
+    const sortedByFlow = [...slots].sort((a, b) => {
+      if (Math.abs(a.top - b.top) <= 6) return a.left - b.left;
+      return a.top - b.top;
+    });
+    const minTop = Math.min(...sortedByFlow.map((slot) => slot.top));
+    const maxBottom = Math.max(...sortedByFlow.map((slot) => slot.bottom));
+    if (y < minTop - REORDER_ROW_OUTSIDE_BUFFER_PX) return 0;
+    if (y > maxBottom + REORDER_ROW_OUTSIDE_BUFFER_PX) return sortedByFlow.length;
+
+    const rows: Array<{ midY: number; slots: TierSlotRect[] }> = [];
+    for (const slot of sortedByFlow) {
+      const lastRow = rows[rows.length - 1];
+      if (!lastRow || Math.abs(slot.midY - lastRow.midY) > REORDER_ROW_MERGE_PX) {
+        rows.push({ midY: slot.midY, slots: [slot] });
+      } else {
+        lastRow.slots.push(slot);
+        lastRow.midY = lastRow.slots.reduce((sum, candidate) => sum + candidate.midY, 0) / lastRow.slots.length;
+      }
+    }
+    for (const row of rows) {
+      row.slots.sort((a, b) => a.midX - b.midX);
+    }
+    const activeRow = rows.reduce((best, candidate) => {
+      if (!best) return candidate;
+      return Math.abs(y - candidate.midY) < Math.abs(y - best.midY) ? candidate : best;
+    }, rows[0]);
+
+    const rowSlots = activeRow.slots;
+    if (!rowSlots.length) return 0;
+    if (x <= rowSlots[0].left) return rowSlots[0].index;
+    if (x >= rowSlots[rowSlots.length - 1].right) return rowSlots[rowSlots.length - 1].index + 1;
+    for (const slot of rowSlots) {
+      if (x < slot.midX) return slot.index;
+    }
+    return rowSlots[rowSlots.length - 1].index + 1;
+  }
+
+  function applyDeadbandForSameTier(target: TierKey, rawNoDragIndex: number, x: number): number {
+    const previous = lastStableLocationRef.current;
+    const previousPointer = lastResolvedPointerRef.current;
+    if (!previous || previous.target !== target) return rawNoDragIndex;
+    const prevNoDragIndex = toNoDragIndex(target, previous.index);
+    if (Math.abs(rawNoDragIndex - prevNoDragIndex) !== 1) return rawNoDragIndex;
+    if (!previousPointer) return rawNoDragIndex;
+    const directionX = x - previousPointer.x;
+    if (directionX === 0) return prevNoDragIndex;
+
+    const slots = tierSlotRectsRef.current[target];
+    if (!slots.length) return rawNoDragIndex;
+    const transitionIndex = Math.max(rawNoDragIndex, prevNoDragIndex);
+    let boundaryX: number | null = null;
+    if (transitionIndex <= 0) boundaryX = slots[0]?.left ?? null;
+    else if (transitionIndex >= slots.length) boundaryX = slots[slots.length - 1]?.right ?? null;
+    else {
+      const leftSlot = slots[transitionIndex - 1];
+      const rightSlot = slots[transitionIndex];
+      if (leftSlot && rightSlot) boundaryX = (leftSlot.midX + rightSlot.midX) / 2;
+    }
+    if (boundaryX === null) return rawNoDragIndex;
+    const movingRight = directionX > 0;
+    if (rawNoDragIndex > prevNoDragIndex) {
+      if (!movingRight) return prevNoDragIndex;
+      if (x < boundaryX + REORDER_DEADBAND_PX) return prevNoDragIndex;
+    } else {
+      if (movingRight) return prevNoDragIndex;
+      if (x > boundaryX - REORDER_DEADBAND_PX) return prevNoDragIndex;
+    }
+    return rawNoDragIndex;
+  }
 
   useEffect(() => {
     if (!cardMenu) return;
@@ -381,23 +527,68 @@ function App() {
   }, [cardMenu]);
 
   useEffect(() => {
+    if (!dragGameId) return;
+    const handleWindowResize = () => scheduleTierSlotRectRefresh();
+    const handleWindowScroll = () => scheduleTierSlotRectRefresh();
+    const initTimer = window.setTimeout(() => captureTierSlotRects(), 0);
+    window.addEventListener("resize", handleWindowResize);
+    window.addEventListener("scroll", handleWindowScroll, true);
+    return () => {
+      window.clearTimeout(initTimer);
+      window.removeEventListener("resize", handleWindowResize);
+      window.removeEventListener("scroll", handleWindowScroll, true);
+      if (slotRefreshRafRef.current) {
+        window.cancelAnimationFrame(slotRefreshRafRef.current);
+      }
+      slotRefreshRafRef.current = null;
+      tierSlotRectsRef.current = { S: [], A: [], B: [], C: [], D: [], F: [] };
+    };
+  }, [dragGameId]);
+
+  useEffect(() => {
+    if (!dragGameId) return;
+    const resolve = () => {
+      const pending = pendingPointerRef.current;
+      if (pending) {
+        pendingPointerRef.current = null;
+        const nextLocation = locationFromPoint(pending.x, pending.y);
+        lastResolvedPointerRef.current = pending;
+        if (nextLocation) {
+          setDragOver((prev) => {
+            if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
+              return prev;
+            }
+            dragOverRef.current = nextLocation;
+            return nextLocation;
+          });
+          lastStableLocationRef.current = nextLocation;
+        }
+      }
+      dragResolveRafRef.current = window.requestAnimationFrame(resolve);
+    };
+    dragResolveRafRef.current = window.requestAnimationFrame(resolve);
+    return () => {
+      if (dragResolveRafRef.current) {
+        window.cancelAnimationFrame(dragResolveRafRef.current);
+      }
+      dragResolveRafRef.current = null;
+      pendingPointerRef.current = null;
+      lastResolvedPointerRef.current = null;
+      lastStableLocationRef.current = null;
+    };
+  }, [dragGameId]);
+
+  useEffect(() => {
     if (!touchDrag) return;
     const onGlobalPointerMove = (event: PointerEvent) => {
       if (event.pointerId !== touchDrag.pointerId) return;
       dragPointerYRef.current = event.clientY;
       setTouchDrag((prev) => (prev ? { ...prev, x: event.clientX, y: event.clientY } : prev));
-      const nextLocation = locationFromPoint(event.clientX, event.clientY);
-      if (!nextLocation) return;
-      setDragOver((prev) => {
-        if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
-          return prev;
-        }
-        dragOverRef.current = nextLocation;
-        return nextLocation;
-      });
+      pendingPointerRef.current = { x: event.clientX, y: event.clientY };
     };
     const onGlobalPointerFinalize = (event: PointerEvent) => {
       if (event.pointerId !== touchDrag.pointerId) return;
+      pendingPointerRef.current = { x: event.clientX, y: event.clientY };
       const latestOver = dragOverRef.current ?? locationFromPoint(event.clientX, event.clientY);
       const gameId = dragGameIdRef.current;
       if (gameId && latestOver) {
@@ -414,7 +605,7 @@ function App() {
       window.removeEventListener("pointerup", onGlobalPointerFinalize);
       window.removeEventListener("pointercancel", onGlobalPointerFinalize);
     };
-  }, [touchDrag, locationFromPoint]);
+  }, [touchDrag]);
 
   useEffect(() => {
     if (!dropFlashTarget) return;
@@ -870,6 +1061,9 @@ function App() {
     });
     setDragOver(null);
     dragOverRef.current = null;
+    lastStableLocationRef.current = null;
+    pendingPointerRef.current = null;
+    lastResolvedPointerRef.current = null;
     setDragOrigin(null);
     setDragGameId(null);
   }
@@ -887,10 +1081,11 @@ function App() {
     const ids = tierState.tiers[tier];
     const indexById = new Map(ids.map((id, idx) => [id, idx]));
     const withoutDragged = dragGameId ? ids.filter((id) => id !== dragGameId) : ids;
-    const tokens: Array<{ kind: "card"; id: string; sourceIndex: number } | { kind: "insert" }> = withoutDragged.map((id) => ({
+    const tokens: Array<{ kind: "card"; id: string; sourceIndex: number; previewIndex: number } | { kind: "insert" }> = withoutDragged.map((id, previewIndex) => ({
       kind: "card",
       id,
-      sourceIndex: indexById.get(id) ?? 0
+      sourceIndex: indexById.get(id) ?? 0,
+      previewIndex
     }));
     const insertIndex = previewInsertIndex(tier);
     if (dragGameId && insertIndex !== null) {
@@ -944,6 +1139,9 @@ function App() {
     setDragOrigin({ target, index });
     setDragOver({ target, index });
     dragOverRef.current = { target, index };
+    lastStableLocationRef.current = { target, index };
+    lastResolvedPointerRef.current = { x: e.clientX, y: e.clientY };
+    pendingPointerRef.current = { x: e.clientX, y: e.clientY };
     setTouchDrag({
       pointerId: e.pointerId,
       pointerType: e.pointerType,
@@ -968,6 +1166,9 @@ function App() {
     setDragOrigin(null);
     setDragOver(null);
     dragOverRef.current = null;
+    lastStableLocationRef.current = null;
+    pendingPointerRef.current = null;
+    lastResolvedPointerRef.current = null;
     setTouchDrag(null);
     dragPointerYRef.current = null;
   }
@@ -982,37 +1183,11 @@ function App() {
     if (target === "UNRANKED" || !isSameCategoryDrag) {
       return { target, index: ids.length };
     }
-    const cardEl = node?.closest<HTMLElement>("[data-drop-card='true']");
-    if (cardEl && cardEl.dataset.target === target) {
-      const index = Number(cardEl.dataset.index || 0);
-      const rect = cardEl.getBoundingClientRect();
-      const midpoint = rect.left + rect.width / 2;
-      const distanceToMid = Math.abs(x - midpoint);
-      const previous = dragOverRef.current;
-      if (
-        distanceToMid <= DRAG_EDGE_HYSTERESIS_PX &&
-        previous?.target === target &&
-        (previous.index === index || previous.index === index + 1)
-      ) {
-        return { target, index: previous.index };
-      }
-      return { target, index: x < midpoint ? index : index + 1 };
-    }
-    const cardEls = Array.from(rowEl.querySelectorAll<HTMLElement>("[data-drop-card='true'][data-target='" + target + "']"));
-    if (cardEls.length === 0) return { target, index: 0 };
-    const lastRect = cardEls[cardEls.length - 1].getBoundingClientRect();
-    if (x >= lastRect.right && y >= lastRect.top - DRAG_EDGE_HYSTERESIS_PX) {
-      return { target, index: cardEls.length };
-    }
-    for (let i = 0; i < cardEls.length; i += 1) {
-      const rect = cardEls[i].getBoundingClientRect();
-      if (y < rect.top) return { target, index: i };
-      if (y <= rect.bottom) {
-        const midpoint = rect.left + rect.width / 2;
-        return { target, index: x < midpoint ? i : i + 1 };
-      }
-    }
-    return { target, index: cardEls.length };
+    const tierTarget = target as TierKey;
+    let rawNoDragIndex = computeSameTierNoDragIndex(tierTarget, x, y);
+    rawNoDragIndex = applyDeadbandForSameTier(tierTarget, rawNoDragIndex, x);
+    const fullIndex = toFullIndex(target, rawNoDragIndex);
+    return { target, index: Math.max(0, Math.min(ids.length, fullIndex)) };
   }
 
   function onTouchPointerMove(e: React.PointerEvent<HTMLElement>) {
@@ -1020,15 +1195,7 @@ function App() {
     e.preventDefault();
     dragPointerYRef.current = e.clientY;
     setTouchDrag((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
-    const nextLocation = locationFromPoint(e.clientX, e.clientY);
-    if (!nextLocation) return;
-    setDragOver((prev) => {
-      if (prev && prev.target === nextLocation.target && prev.index === nextLocation.index) {
-        return prev;
-      }
-      dragOverRef.current = nextLocation;
-      return nextLocation;
-    });
+    pendingPointerRef.current = { x: e.clientX, y: e.clientY };
   }
 
   return (
@@ -1216,8 +1383,9 @@ function App() {
                           <article
                             className="tier-game"
                             data-drop-card="true"
+                            data-game-id={token.id}
                             data-target={tier}
-                            data-index={token.sourceIndex}
+                            data-index={token.previewIndex}
                             onContextMenu={(e) => openCardContextMenu(e, token.id)}
                             onPointerDown={(e) => startTouchDrag(token.id, tier, token.sourceIndex, e)}
                             onPointerMove={onTouchPointerMove}
@@ -1262,6 +1430,7 @@ function App() {
                       <article
                         className="tier-game"
                         data-drop-card="true"
+                        data-game-id={id}
                         data-target="UNRANKED"
                         data-index={idx}
                         onContextMenu={(e) => openCardContextMenu(e, id)}
