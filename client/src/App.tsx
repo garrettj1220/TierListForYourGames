@@ -14,6 +14,7 @@ type TouchDragState = {
   offsetX: number;
   offsetY: number;
   width: number;
+  height: number;
 };
 
 type Game = {
@@ -89,7 +90,7 @@ const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const DRAG_EDGE_HYSTERESIS_PX = 7;
 const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
-const AUTO_SCROLL_HOLD_MS = 420;
+const AUTO_SCROLL_HOLD_MS = 260;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
@@ -246,6 +247,7 @@ function App() {
   const autoScrollRafRef = useRef<number | null>(null);
   const dragGameIdRef = useRef<string | null>(null);
   const dragOverRef = useRef<DragLocation | null>(null);
+  const touchDragRef = useRef<TouchDragState | null>(null);
   const tierAutosaveTimeoutRef = useRef<number | null>(null);
   const tierStateReadyRef = useRef(false);
   const lastSavedTierStateRef = useRef(serializeTierState(DEFAULT_TIER_STATE));
@@ -356,6 +358,10 @@ function App() {
   }, [dragGameId]);
 
   useEffect(() => {
+    touchDragRef.current = touchDrag;
+  }, [touchDrag]);
+
+  useEffect(() => {
     if (!touchDrag) return;
     const onGlobalPointerMove = (event: PointerEvent) => {
       if (event.pointerId !== touchDrag.pointerId) return;
@@ -401,11 +407,15 @@ function App() {
     if (!dragGameId) return;
     const step = () => {
       const y = dragPointerYRef.current;
+      const activeDrag = touchDragRef.current;
       const now = performance.now();
-      if (typeof y === "number") {
+      if (typeof y === "number" || activeDrag) {
         const viewport = window.innerHeight;
-        const topDistance = y;
-        const bottomDistance = viewport - y;
+        const dragTop = activeDrag ? activeDrag.y - activeDrag.offsetY : y ?? 0;
+        const dragBottom = activeDrag ? dragTop + activeDrag.height : y ?? viewport;
+        const pointerY = typeof y === "number" ? y : dragTop;
+        const topDistance = Math.min(pointerY, dragTop);
+        const bottomDistance = Math.min(viewport - pointerY, viewport - dragBottom);
         let delta = 0;
         let nextDirection: -1 | 0 | 1 = 0;
         if (topDistance < AUTO_SCROLL_EDGE_THRESHOLD_PX) {
@@ -453,7 +463,7 @@ function App() {
       autoScrollEdgeDirectionRef.current = 0;
       autoScrollEdgeEnteredAtRef.current = null;
     };
-  }, [dragGameId, touchDrag]);
+  }, [dragGameId]);
 
   useEffect(() => {
     if (!dragGameId || touchDrag) return;
@@ -902,7 +912,8 @@ function App() {
       y: e.clientY,
       offsetX: e.clientX - rect.left,
       offsetY: e.clientY - rect.top,
-      width: rect.width
+      width: rect.width,
+      height: rect.height
     });
     dragPointerYRef.current = e.clientY;
     e.currentTarget.setPointerCapture(e.pointerId);
