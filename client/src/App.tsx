@@ -3,6 +3,7 @@ import "./App.css";
 
 type Screen = "setup" | "stats" | "accounts" | "games" | "editor";
 type TierKey = "S" | "A" | "B" | "C" | "D" | "F";
+type QuickMoveTier = "A" | "B" | "C" | "D" | "F";
 type ThemeMode = "dark" | "light";
 type DropTarget = TierKey | "UNRANKED";
 type DragLocation = { target: DropTarget; index: number };
@@ -87,6 +88,7 @@ const API_BASE = normalizeApiBase(runtimeApiBase || import.meta.env.VITE_API_BAS
 const STUDIO_WEB_BASE = normalizeApiBase(import.meta.env.VITE_STUDIO_WEB_BASE || "https://www.studiojpg.co");
 const APP_BASE_PATH = normalizePathBase(import.meta.env.BASE_URL || import.meta.env.VITE_APP_BASE_PATH || "/tools/tierlist/");
 const TIER_KEYS: TierKey[] = ["S", "A", "B", "C", "D", "F"];
+const QUICK_MOVE_TIERS: QuickMoveTier[] = ["A", "B", "C", "D", "F"];
 const DEFAULT_TIER_STATE: TierListState = { tiers: { S: [], A: [], B: [], C: [], D: [], F: [] }, unranked: [], updatedAt: null };
 const DRAG_EDGE_HYSTERESIS_PX = 7;
 const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
@@ -240,6 +242,7 @@ function App() {
   const [gamesSearchQuery, setGamesSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [cardMenu, setCardMenu] = useState<{ gameId: string; x: number; y: number } | null>(null);
   const dragImageRef = useRef<HTMLElement | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
   const autoScrollEdgeEnteredAtRef = useRef<number | null>(null);
@@ -360,6 +363,22 @@ function App() {
   useEffect(() => {
     touchDragRef.current = touchDrag;
   }, [touchDrag]);
+
+  useEffect(() => {
+    if (!cardMenu) return;
+    const closeMenu = () => setCardMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [cardMenu]);
 
   useEffect(() => {
     if (!touchDrag) return;
@@ -782,6 +801,26 @@ function App() {
     }));
   }
 
+  function quickMoveGameToTier(gameId: string, tier: QuickMoveTier) {
+    setTierState((prev) => {
+      const next: TierListState = {
+        ...prev,
+        tiers: { S: [...prev.tiers.S], A: [...prev.tiers.A], B: [...prev.tiers.B], C: [...prev.tiers.C], D: [...prev.tiers.D], F: [...prev.tiers.F] },
+        unranked: prev.unranked.filter((id) => id !== gameId)
+      };
+      for (const key of TIER_KEYS) {
+        next.tiers[key] = next.tiers[key].filter((id) => id !== gameId);
+      }
+      next.tiers[tier].push(gameId);
+      return next;
+    });
+  }
+
+  function openCardContextMenu(event: React.MouseEvent<HTMLElement>, gameId: string) {
+    event.preventDefault();
+    setCardMenu({ gameId, x: event.clientX, y: event.clientY });
+  }
+
   function clearTierList() {
     const confirmed = window.confirm("Reset all ranked games back to Unranked?");
     if (!confirmed) return;
@@ -1179,6 +1218,7 @@ function App() {
                             data-drop-card="true"
                             data-target={tier}
                             data-index={token.sourceIndex}
+                            onContextMenu={(e) => openCardContextMenu(e, token.id)}
                             onPointerDown={(e) => startTouchDrag(token.id, tier, token.sourceIndex, e)}
                             onPointerMove={onTouchPointerMove}
                           >
@@ -1224,6 +1264,7 @@ function App() {
                         data-drop-card="true"
                         data-target="UNRANKED"
                         data-index={idx}
+                        onContextMenu={(e) => openCardContextMenu(e, id)}
                         onPointerDown={(e) => startTouchDrag(id, "UNRANKED", idx, e)}
                         onPointerMove={onTouchPointerMove}
                       >
@@ -1302,6 +1343,36 @@ function App() {
               </>
             );
           })()}
+        </div>
+      )}
+      {cardMenu && (
+        <div
+          className="card-context-menu"
+          style={{ left: Math.round(cardMenu.x), top: Math.round(cardMenu.y) }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button
+            className="danger"
+            onClick={() => {
+              const gameId = cardMenu.gameId;
+              setCardMenu(null);
+              void removeGame(gameId);
+            }}
+          >
+            Remove
+          </button>
+          {QUICK_MOVE_TIERS.map((tier) => (
+            <button
+              key={tier}
+              onClick={() => {
+                const gameId = cardMenu.gameId;
+                setCardMenu(null);
+                quickMoveGameToTier(gameId, tier);
+              }}
+            >
+              Move to {tier}
+            </button>
+          ))}
         </div>
       )}
     </div>
