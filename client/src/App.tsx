@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import "./App.css";
 
 type Screen = "setup" | "stats" | "accounts" | "games" | "editor";
@@ -68,6 +68,13 @@ type SearchResult = {
 };
 
 type GamesTab = "main" | "removed";
+type ExportPlanMode = "single" | "tier-paged";
+type ExportPagePlan = {
+  tiers: TierKey[];
+  cardsPerRow: number;
+  cardWidth: number;
+  pageIndex: number;
+};
 
 function normalizeApiBase(rawValue: unknown): string {
   const firstToken = String(rawValue ?? "")
@@ -107,6 +114,20 @@ const REORDER_ROW_MERGE_PX = 28;
 const REORDER_ROW_OUTSIDE_BUFFER_PX = 24;
 const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
 const AUTO_SCROLL_HOLD_MS = 260;
+const PDF_PAGE_WIDTH_PX = 1320;
+const PDF_PAGE_HEIGHT_PX = 1020;
+const PDF_CONTENT_PADDING_X = 24;
+const PDF_CONTENT_PADDING_Y = 24;
+const PDF_TIER_ROW_INSET_X = 16;
+const PDF_TIER_STACK_GAP_PX = 7;
+const PDF_TIER_ROW_BASE_PX = 54;
+const PDF_TIER_ROW_GAP_PX = 8;
+const PDF_CARD_ASPECT_RATIO = 374 / 264;
+const PDF_CARD_TEXT_HEIGHT_PX = 28;
+const PDF_TITLE_BLOCK_PX = 62;
+const PDF_DATE_BLOCK_PX = 24;
+const PDF_MIN_CARD_WIDTH = 60;
+const PDF_MAX_CARDS_PER_ROW = 20;
 const COVER_EMPTY_VALUES = new Set(["", "null", "undefined", "n/a", "na"]);
 const ACCOUNT_PLATFORMS = ["Steam", "Xbox", "PlayStation"];
 const THEME_STORAGE_KEY_PREFIX = "tierlist_theme_mode_";
@@ -160,6 +181,45 @@ function sanitizePdfFileName(title: string): string {
   const trimmed = String(title || "").trim();
   const safe = trimmed.replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim();
   return safe || "tier-list";
+}
+
+function computeTierRowCount(tierGameCount: number, cardsPerRow: number): number {
+  if (tierGameCount <= 0) return 1;
+  const safeCardsPerRow = Math.max(1, cardsPerRow);
+  return Math.max(1, Math.ceil(tierGameCount / safeCardsPerRow));
+}
+
+function estimateTierBlockHeight(tierGameCount: number, cardsPerRow: number, cardWidth: number): number {
+  const rows = computeTierRowCount(tierGameCount, cardsPerRow);
+  const cardHeight = Math.max(1, cardWidth * PDF_CARD_ASPECT_RATIO + PDF_CARD_TEXT_HEIGHT_PX);
+  const cardsStackHeight = rows * cardHeight + Math.max(0, rows - 1) * PDF_TIER_ROW_GAP_PX;
+  return Math.ceil(PDF_TIER_ROW_BASE_PX + cardsStackHeight);
+}
+
+function estimateBoardHeight(
+  cardsPerRow: number,
+  cardWidth: number,
+  tierCounts: Record<TierKey, number>,
+  includeDate: boolean,
+  includeTitle: boolean
+): number {
+  const stackHeight = TIER_KEYS.reduce((total, tier, idx) => {
+    const tierHeight = estimateTierBlockHeight(tierCounts[tier], cardsPerRow, cardWidth);
+    return total + tierHeight + (idx > 0 ? PDF_TIER_STACK_GAP_PX : 0);
+  }, 0);
+  return (
+    PDF_CONTENT_PADDING_Y * 2 +
+    (includeTitle ? PDF_TITLE_BLOCK_PX : 0) +
+    stackHeight +
+    (includeDate ? PDF_DATE_BLOCK_PX : 0)
+  );
+}
+
+function cardsPerRowForPageWidth(pageContentWidth: number, gap: number, minCardWidth: number): number {
+  const numerator = pageContentWidth + gap;
+  const denominator = Math.max(1, minCardWidth + gap);
+  const estimate = Math.floor(numerator / denominator);
+  return Math.max(1, Math.min(PDF_MAX_CARDS_PER_ROW, estimate));
 }
 
 function readStoredTheme(userId: string): ThemeMode {
@@ -297,7 +357,7 @@ function App() {
   const dragGameIdRef = useRef<string | null>(null);
   const dragOriginRef = useRef<DragLocation | null>(null);
   const dragOverRef = useRef<DragLocation | null>(null);
-  const pdfExportSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const pdfExportPageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const pendingPointerRef = useRef<DragPointer | null>(null);
   const lastResolvedPointerRef = useRef<DragPointer | null>(null);
   const lastStableLocationRef = useRef<DragLocation | null>(null);
@@ -359,6 +419,62 @@ function App() {
   }, [games, gamesSearchQuery]);
 
   const pdfPreviewTitle = pdfTitleInput.trim() || defaultPdfTitle(username);
+  const pdfTierCounts = useMemo(() => {
+    return TIER_KEYS.reduce<Record<TierKey, number>>((acc, tier) => {
+      acc[tier] = tierState.tiers[tier].length;
+      return acc;
+    }, { S: 0, A: 0, B: 0, C: 0, D: 0, F: 0 });
+  }, [tierState]);
+  const pdfExportPlan = useMemo((): { mode: ExportPlanMode; pages: ExportPagePlan[] } => {
+    const tierContentWidth = PDF_PAGE_WIDTH_PX - PDF_CONTENT_PADDING_X * 2 - PDF_TIER_ROW_INSET_X;
+    const maxCardsPerRow = cardsPerRowForPageWidth(tierContentWidth, PDF_TIER_ROW_GAP_PX, PDF_MIN_CARD_WIDTH);
+    let singlePagePlan: ExportPagePlan | null = null;
+    for (let cardsPerRow = 1; cardsPerRow <= maxCardsPerRow; cardsPerRow += 1) {
+      const computedWidth = Math.floor((tierContentWidth - (cardsPerRow - 1) * PDF_TIER_ROW_GAP_PX) / cardsPerRow);
+      if (computedWidth < PDF_MIN_CARD_WIDTH) continue;
+      const boardHeight = estimateBoardHeight(cardsPerRow, computedWidth, pdfTierCounts, pdfIncludeDate, true);
+      if (boardHeight <= PDF_PAGE_HEIGHT_PX) {
+        singlePagePlan = { tiers: [...TIER_KEYS], cardsPerRow, cardWidth: computedWidth, pageIndex: 0 };
+        break;
+      }
+    }
+    if (singlePagePlan) return { mode: "single", pages: [singlePagePlan] };
+    const fallbackCardsPerRow = maxCardsPerRow;
+    const fallbackCardWidth = Math.max(
+      PDF_MIN_CARD_WIDTH,
+      Math.floor((tierContentWidth - (fallbackCardsPerRow - 1) * PDF_TIER_ROW_GAP_PX) / fallbackCardsPerRow)
+    );
+    const pageCapacity = PDF_PAGE_HEIGHT_PX - PDF_CONTENT_PADDING_Y * 2 - PDF_TITLE_BLOCK_PX - (pdfIncludeDate ? PDF_DATE_BLOCK_PX : 0);
+    const pages: ExportPagePlan[] = [];
+    let currentTiers: TierKey[] = [];
+    let currentHeight = 0;
+    for (const tier of TIER_KEYS) {
+      const tierHeight = estimateTierBlockHeight(pdfTierCounts[tier], fallbackCardsPerRow, fallbackCardWidth);
+      const nextHeight = currentHeight + (currentTiers.length ? PDF_TIER_STACK_GAP_PX : 0) + tierHeight;
+      if (currentTiers.length > 0 && nextHeight > pageCapacity) {
+        pages.push({
+          tiers: currentTiers,
+          cardsPerRow: fallbackCardsPerRow,
+          cardWidth: fallbackCardWidth,
+          pageIndex: pages.length
+        });
+        currentTiers = [tier];
+        currentHeight = tierHeight;
+      } else {
+        currentTiers.push(tier);
+        currentHeight = nextHeight;
+      }
+    }
+    if (currentTiers.length) {
+      pages.push({
+        tiers: currentTiers,
+        cardsPerRow: fallbackCardsPerRow,
+        cardWidth: fallbackCardWidth,
+        pageIndex: pages.length
+      });
+    }
+    return { mode: "tier-paged", pages };
+  }, [pdfTierCounts, pdfIncludeDate]);
 
   function readStoredPdfPrefs(userId: string): { title: string; includeDate: boolean } | null {
     try {
@@ -1209,27 +1325,40 @@ function App() {
     setPdfTitleInput(normalizedTitle);
     setPdfExporting(true);
     try {
-      setStatus("Exporting PDF...");
+      setStatus(
+        pdfExportPlan.mode === "single"
+          ? "Exporting PDF..."
+          : "Large list detected, exporting multi-page by tiers."
+      );
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
-      const surface = pdfExportSurfaceRef.current;
-      if (!surface) {
-        throw new Error("PDF export surface not ready");
+      const [html2canvasModule, module] = await Promise.all([import("html2canvas"), import("jspdf")]);
+      const html2canvasFn: any = (html2canvasModule as any).default ?? html2canvasModule;
+      if (typeof html2canvasFn !== "function") {
+        throw new Error("Capture engine unavailable");
       }
-      const [{ default: html2canvas }, module] = await Promise.all([import("html2canvas"), import("jspdf")]);
-      const canvas = await html2canvas(surface, {
-        scale: Math.max(2, window.devicePixelRatio || 1),
-        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#090c12",
-        useCORS: true,
-        logging: false
-      });
       const JsPdfCtor: any = (module as any).jsPDF ?? (module as any).default?.jsPDF ?? (module as any).default;
       if (typeof JsPdfCtor !== "function") {
         throw new Error("PDF engine unavailable");
       }
-      const orientation = canvas.width >= canvas.height ? "landscape" : "portrait";
-      const doc = new JsPdfCtor({ orientation, unit: "px", format: [canvas.width, canvas.height] });
-      const imageData = canvas.toDataURL("image/png");
-      doc.addImage(imageData, "PNG", 0, 0, canvas.width, canvas.height, undefined, "FAST");
+      const doc = new JsPdfCtor({ orientation: "landscape", unit: "pt", format: "letter" });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const sheets = pdfExportPlan.pages;
+      if (!sheets.length) throw new Error("Nothing to export");
+      const backgroundColor = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#090c12";
+      for (let pageIndex = 0; pageIndex < sheets.length; pageIndex += 1) {
+        const pageNode = pdfExportPageRefs.current[pageIndex];
+        if (!pageNode) throw new Error(`PDF export surface missing for page ${pageIndex + 1}`);
+        const canvas = await html2canvasFn(pageNode, {
+          scale: Math.max(2, window.devicePixelRatio || 1),
+          backgroundColor,
+          useCORS: true,
+          logging: false
+        });
+        if (pageIndex > 0) doc.addPage("letter", "landscape");
+        const imageData = canvas.toDataURL("image/png");
+        doc.addImage(imageData, "PNG", 0, 0, pageWidth, pageHeight, undefined, "FAST");
+      }
       doc.setProperties({ title: normalizedTitle });
       doc.save(`${sanitizePdfFileName(normalizedTitle)}.pdf`);
       writeStoredPdfPrefs(username || "guest", { title: normalizedTitle, includeDate: pdfIncludeDate });
@@ -1237,7 +1366,8 @@ function App() {
       setStatus("PDF downloaded.");
     } catch (error) {
       console.error(error);
-      setStatus("PDF export failed.");
+      const details = error instanceof Error ? error.message : "Unknown error";
+      setStatus(`PDF export failed. ${details}`);
     } finally {
       setPdfExporting(false);
       window.setTimeout(() => setStatus(""), 1400);
@@ -1664,38 +1794,58 @@ function App() {
         </div>
       )}
 
-      <div className="pdf-export-root" aria-hidden="true">
-        <div ref={pdfExportSurfaceRef} className="pdf-export-sheet panel">
-          <h1 className="pdf-export-title">{pdfPreviewTitle}</h1>
-          <div className="tier-wrap">
-            {TIER_KEYS.map((tier) => (
-              <section key={`pdf-${tier}`} className={`tier-row tier-${tier}`}>
-                <header>
-                  <span className="tier-label">{tier}</span>
-                </header>
-                <div className={`tier-cards tier-cards-ranked ${tierState.tiers[tier].length === 0 ? "is-empty" : ""}`}>
-                  {tierState.tiers[tier].map((id) => {
-                    const game = gameMap.get(id);
-                    if (!game) return null;
-                    return (
-                      <div key={`pdf-${tier}-${id}`} className="tier-item-slot">
-                        <article className="tier-game">
-                          {gameHasUsableCover(game, id) ? (
-                            <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
-                          ) : (
-                            <div className="cover-fallback cover-fallback-tier cover-fallback-empty" aria-label="No cover art" />
-                          )}
-                          <span>{game.title}</span>
-                        </article>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
-          </div>
-          {pdfIncludeDate && <p className="pdf-export-date">{formatDateOnly(new Date())}</p>}
-        </div>
+      <div className="pdf-export-pages-root" aria-hidden="true">
+        {pdfExportPlan.pages.map((page) => {
+          const isFirstPage = page.pageIndex === 0;
+          const isLastPage = page.pageIndex === pdfExportPlan.pages.length - 1;
+          return (
+            <div
+              key={`pdf-sheet-${page.pageIndex}`}
+              ref={(node) => {
+                pdfExportPageRefs.current[page.pageIndex] = node;
+              }}
+              className="pdf-export-sheet panel"
+              style={
+                {
+                  "--pdf-page-width": `${PDF_PAGE_WIDTH_PX}px`,
+                  "--pdf-page-height": `${PDF_PAGE_HEIGHT_PX}px`,
+                  "--pdf-card-width": `${page.cardWidth}px`,
+                  "--pdf-cards-per-row": String(page.cardsPerRow)
+                } as CSSProperties
+              }
+            >
+              {isFirstPage && <h1 className="pdf-export-title">{pdfPreviewTitle}</h1>}
+              <div className="tier-wrap">
+                {page.tiers.map((tier) => (
+                  <section key={`pdf-${page.pageIndex}-${tier}`} className={`tier-row tier-${tier}`}>
+                    <header>
+                      <span className="tier-label">{tier}</span>
+                    </header>
+                    <div className={`tier-cards tier-cards-ranked ${tierState.tiers[tier].length === 0 ? "is-empty" : ""}`}>
+                      {tierState.tiers[tier].map((id) => {
+                        const game = gameMap.get(id);
+                        if (!game) return null;
+                        return (
+                          <div key={`pdf-${page.pageIndex}-${tier}-${id}`} className="tier-item-slot">
+                            <article className="tier-game">
+                              {gameHasUsableCover(game, id) ? (
+                                <img src={assetUrl(game.coverArtUrl) ?? undefined} alt={game.title} draggable={false} />
+                              ) : (
+                                <div className="cover-fallback cover-fallback-tier cover-fallback-empty" aria-label="No cover art" />
+                              )}
+                              <span>{game.title}</span>
+                            </article>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+              {pdfIncludeDate && isLastPage && <p className="pdf-export-date">{formatDateOnly(new Date())}</p>}
+            </div>
+          );
+        })}
       </div>
 
       {touchDrag && dragGameId && gameMap.get(dragGameId) && (

@@ -667,32 +667,70 @@ button.danger:hover {
   text-align: left;
 }
 
-.pdf-export-root {
+.pdf-export-pages-root {
   position: fixed;
   left: -20000px;
   top: 0;
   pointer-events: none;
   z-index: -1;
+  display: grid;
+  gap: 32px;
 }
 
 .pdf-export-sheet {
-  width: 1600px;
-  padding: 18px;
+  --pdf-page-width: 1320px;
+  --pdf-page-height: 1020px;
+  --pdf-card-width: 98px;
+  --pdf-cards-per-row: 10;
+  width: var(--pdf-page-width);
+  min-height: var(--pdf-page-height);
+  padding: 24px;
+  box-sizing: border-box;
   background: var(--bg);
   border: 1px solid var(--line);
 }
 
 .pdf-export-title {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   font-size: 2rem;
   letter-spacing: 0.01em;
 }
 
 .pdf-export-date {
-  margin: 6px 0 0;
+  margin: 10px 0 0;
   font-size: 0.94rem;
   color: var(--muted);
   text-align: right;
+}
+
+.pdf-export-sheet .tier-wrap {
+  gap: 7px;
+}
+
+.pdf-export-sheet .tier-row {
+  padding: 8px;
+}
+
+.pdf-export-sheet .tier-cards-ranked {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 0;
+}
+
+.pdf-export-sheet .tier-item-slot {
+  flex: 0 0 var(--pdf-card-width);
+  min-width: var(--pdf-card-width);
+  width: var(--pdf-card-width);
+}
+
+.pdf-export-sheet .tier-game {
+  padding: 6px;
+  gap: 5px;
+}
+
+.pdf-export-sheet .tier-game span {
+  font-size: 0.72rem;
 }
 
 @media (max-width: 760px) {
