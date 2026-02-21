@@ -114,6 +114,7 @@ const REORDER_ROW_MERGE_PX = 28;
 const REORDER_ROW_OUTSIDE_BUFFER_PX = 24;
 const AUTO_SCROLL_EDGE_THRESHOLD_PX = 130;
 const AUTO_SCROLL_HOLD_MS = 260;
+const DRAG_START_THRESHOLD_PX = 6;
 const PDF_PAGE_WIDTH_PX = 1320;
 const PDF_PAGE_HEIGHT_PX = 1020;
 const PDF_CONTENT_PADDING_X = 24;
@@ -359,6 +360,8 @@ function App() {
   const autoScrollRafRef = useRef<number | null>(null);
   const dragResolveRafRef = useRef<number | null>(null);
   const slotRefreshRafRef = useRef<number | null>(null);
+  const dragMovedRef = useRef(false);
+  const dragStartPointerRef = useRef<DragPointer | null>(null);
   const dragGameIdRef = useRef<string | null>(null);
   const dragOriginRef = useRef<DragLocation | null>(null);
   const dragOverRef = useRef<DragLocation | null>(null);
@@ -776,12 +779,24 @@ function App() {
     if (!touchDrag) return;
     const onGlobalPointerMove = (event: PointerEvent) => {
       if (event.pointerId !== touchDrag.pointerId) return;
+      const start = dragStartPointerRef.current;
+      if (start && !dragMovedRef.current) {
+        const dx = event.clientX - start.x;
+        const dy = event.clientY - start.y;
+        if (Math.hypot(dx, dy) >= DRAG_START_THRESHOLD_PX) {
+          dragMovedRef.current = true;
+        }
+      }
       dragPointerYRef.current = event.clientY;
       setTouchDrag((prev) => (prev ? { ...prev, x: event.clientX, y: event.clientY } : prev));
       pendingPointerRef.current = { x: event.clientX, y: event.clientY };
     };
     const onGlobalPointerFinalize = (event: PointerEvent) => {
       if (event.pointerId !== touchDrag.pointerId) return;
+      if (!dragMovedRef.current) {
+        endDrag();
+        return;
+      }
       pendingPointerRef.current = { x: event.clientX, y: event.clientY };
       const latestOver = dragOverRef.current ?? locationFromPoint(event.clientX, event.clientY);
       const gameId = dragGameIdRef.current;
@@ -1425,6 +1440,8 @@ function App() {
       width: rect.width,
       height: rect.height
     });
+    dragMovedRef.current = false;
+    dragStartPointerRef.current = { x: e.clientX, y: e.clientY };
     dragPointerYRef.current = e.clientY;
     e.currentTarget.setPointerCapture(e.pointerId);
     e.preventDefault();
@@ -1444,6 +1461,8 @@ function App() {
     lastResolvedPointerRef.current = null;
     setTouchDrag(null);
     dragPointerYRef.current = null;
+    dragMovedRef.current = false;
+    dragStartPointerRef.current = null;
   }
 
   function locationFromPoint(x: number, y: number): DragLocation | null {
@@ -1466,6 +1485,14 @@ function App() {
   function onTouchPointerMove(e: React.PointerEvent<HTMLElement>) {
     if (!touchDrag || e.pointerId !== touchDrag.pointerId) return;
     e.preventDefault();
+    const start = dragStartPointerRef.current;
+    if (start && !dragMovedRef.current) {
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (Math.hypot(dx, dy) >= DRAG_START_THRESHOLD_PX) {
+        dragMovedRef.current = true;
+      }
+    }
     dragPointerYRef.current = e.clientY;
     setTouchDrag((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
     pendingPointerRef.current = { x: e.clientX, y: e.clientY };
