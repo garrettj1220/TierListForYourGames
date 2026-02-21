@@ -509,6 +509,24 @@ class JsonStorage {
     await writeDb(db);
     return { restored: restoredGames.length, games: restoredGames };
   }
+
+  async updateGameCover(userId, gameId, coverArtUrl, metadataPatch = {}) {
+    const db = await readDb();
+    const owned = db.userGames.some((g) => g.userId === userId && g.id === gameId);
+    if (!owned) return { updated: false, game: null };
+    db.gamesNormalized = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
+    const catalogGame = db.gamesNormalized.find((g) => g.id === gameId);
+    if (!catalogGame) return { updated: false, game: null };
+    catalogGame.coverArtUrl = coverArtUrl || catalogGame.coverArtUrl || null;
+    catalogGame.metadata = { ...(catalogGame.metadata || {}), ...(metadataPatch || {}) };
+    for (const userGame of db.userGames) {
+      if (userGame.userId !== userId || userGame.id !== gameId) continue;
+      userGame.coverArtUrl = catalogGame.coverArtUrl || null;
+    }
+    await writeDb(db);
+    const game = db.userGames.find((g) => g.userId === userId && g.id === gameId) || null;
+    return { updated: true, game };
+  }
 }
 
 class PgStorage {
@@ -1085,6 +1103,47 @@ class PgStorage {
           })
         );
       return { restored: restoredGames.length, games: restoredGames };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateGameCover(userId, gameId, coverArtUrl, metadataPatch = {}) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const owns = await client.query(
+        "SELECT 1 FROM user_games WHERE user_id = $1 AND game_id = $2 LIMIT 1",
+        [userId, gameId]
+      );
+      if (!owns.rows[0]) {
+        await client.query("ROLLBACK");
+        return { updated: false, game: null };
+      }
+      const metadataJson = JSON.stringify(metadataPatch || {});
+      await client.query(
+        `UPDATE games_normalized
+         SET cover_art_url = COALESCE($1, cover_art_url),
+             metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+         WHERE id = $3`,
+        [coverArtUrl || null, metadataJson, gameId]
+      );
+      const gameResult = await client.query(
+        `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, g.metadata, ug.playtime_minutes, ug.manually_added
+         FROM user_games ug
+         JOIN games_normalized g ON g.id = ug.game_id
+         WHERE ug.user_id = $1 AND ug.game_id = $2
+         LIMIT 1`,
+        [userId, gameId]
+      );
+      await client.query("COMMIT");
+      return {
+        updated: true,
+        game: gameResult.rows[0] ? normalizeGameRecord(gameResult.rows[0]) : null
+      };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

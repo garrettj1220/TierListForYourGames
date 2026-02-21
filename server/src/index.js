@@ -562,6 +562,41 @@ app.post("/api/tierlist/games/restore", async (req, res) => {
   res.json({ ok: true, ...result });
 });
 
+app.post("/api/tierlist/games/backfill-covers", async (req, res) => {
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
+  const { gameIds } = req.body ?? {};
+  const requestedIds = Array.isArray(gameIds) ? Array.from(new Set(gameIds.map((id) => String(id)))) : [];
+  const games = await storage.getGames(userId);
+  const candidates = requestedIds.length
+    ? games.filter((game) => requestedIds.includes(String(game.id)))
+    : games.filter((game) => !String(game.coverArtUrl || "").trim());
+  const updatedGames = [];
+  for (const game of candidates) {
+    try {
+      const results = await externalSearch(game.title);
+      const best = pickBestExternalCoverMatch(game, results);
+      if (!best?.coverArtUrl) continue;
+      const patch = {
+        igdbId: best.metadata?.igdbId || null,
+        coverImageId: best.metadata?.coverImageId || null,
+        platforms: best.metadata?.platforms || [],
+        developers: best.metadata?.developers || [],
+        publishers: best.metadata?.publishers || [],
+        creators: best.metadata?.creators || []
+      };
+      const outcome = await storage.updateGameCover(userId, game.id, best.coverArtUrl, patch);
+      if (outcome?.updated && outcome?.game) {
+        updatedGames.push(outcome.game);
+      }
+    } catch {
+      // best-effort per-game backfill
+    }
+  }
+  return res.json({ ok: true, scanned: candidates.length, updated: updatedGames.length, games: updatedGames });
+});
+
 app.put("/api/tierlist/tier-list/state", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
@@ -624,6 +659,43 @@ async function externalSearch(query) {
   } catch {
     return [];
   }
+}
+
+function normalizedTitleKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function scoreExternalMatch(game, candidate) {
+  const gameKey = normalizedTitleKey(game?.title);
+  const candidateKey = normalizedTitleKey(candidate?.title);
+  let score = 0;
+  if (!candidate?.coverArtUrl) score -= 10;
+  if (candidateKey && gameKey && candidateKey === gameKey) score += 100;
+  else if (candidateKey && gameKey && candidateKey.includes(gameKey)) score += 70;
+  else if (candidateKey && gameKey && gameKey.includes(candidateKey)) score += 50;
+  const platform = String(game?.platform || "").toLowerCase();
+  const platforms = Array.isArray(candidate?.metadata?.platforms)
+    ? candidate.metadata.platforms.map((p) => String(p).toLowerCase())
+    : [];
+  if (platform.includes("steam") && platforms.some((p) => p.includes("steam") || p.includes("pc"))) score += 15;
+  return score;
+}
+
+function pickBestExternalCoverMatch(game, candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  let best = null;
+  let bestScore = -Infinity;
+  for (const candidate of candidates) {
+    const score = scoreExternalMatch(game, candidate);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  if (!best || !best.coverArtUrl) return null;
+  return best;
 }
 
 async function getIgdbAccessToken(clientId, clientSecret) {
