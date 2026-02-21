@@ -525,7 +525,7 @@ app.post("/api/tierlist/games/manual", async (req, res) => {
   if (!title) {
     return res.status(400).json({ error: "title is required" });
   }
-  const game = await storage.addManualGame(userId, {
+  let game = await storage.addManualGame(userId, {
     title,
     platform,
     genre,
@@ -535,6 +535,23 @@ app.post("/api/tierlist/games/manual", async (req, res) => {
     metadata,
     manuallyAdded
   });
+  let hasUsableCover = false;
+  if (String(game?.coverArtUrl || "").trim()) {
+    hasUsableCover = await urlExists(game.coverArtUrl);
+  }
+  if (!hasUsableCover) {
+    const resolved = await resolveBestCoverForGame(game);
+    const outcome = await storage.updateGameCover(
+      userId,
+      game.id,
+      resolved.coverArtUrl,
+      resolved.metadata || {},
+      { allowClear: true }
+    );
+    if (outcome?.game) {
+      game = outcome.game;
+    }
+  }
   res.status(201).json({ game });
 });
 
@@ -575,18 +592,14 @@ app.post("/api/tierlist/games/backfill-covers", async (req, res) => {
   const updatedGames = [];
   for (const game of candidates) {
     try {
-      const results = await externalSearch(game.title);
-      const best = pickBestExternalCoverMatch(game, results);
-      if (!best?.coverArtUrl) continue;
-      const patch = {
-        igdbId: best.metadata?.igdbId || null,
-        coverImageId: best.metadata?.coverImageId || null,
-        platforms: best.metadata?.platforms || [],
-        developers: best.metadata?.developers || [],
-        publishers: best.metadata?.publishers || [],
-        creators: best.metadata?.creators || []
-      };
-      const outcome = await storage.updateGameCover(userId, game.id, best.coverArtUrl, patch);
+      const resolved = await resolveBestCoverForGame(game);
+      const outcome = await storage.updateGameCover(
+        userId,
+        game.id,
+        resolved.coverArtUrl,
+        resolved.metadata || {},
+        { allowClear: true }
+      );
       if (outcome?.updated && outcome?.game) {
         updatedGames.push(outcome.game);
       }
@@ -696,6 +709,99 @@ function pickBestExternalCoverMatch(game, candidates) {
   }
   if (!best || !best.coverArtUrl) return null;
   return best;
+}
+
+function extractSteamAppIdFromGame(game) {
+  const sourceKey = String(game?.sourceKey || game?.source_key || "");
+  if (sourceKey.startsWith("steam:")) {
+    const fromKey = sourceKey.split(":")[1] || "";
+    if (/^\d+$/.test(fromKey)) return fromKey;
+  }
+  const metadata = game?.metadata && typeof game.metadata === "object" ? game.metadata : {};
+  const fromMeta = String(metadata?.steamAppId || "").trim();
+  if (/^\d+$/.test(fromMeta)) return fromMeta;
+  return null;
+}
+
+async function urlExists(url) {
+  try {
+    const head = await fetch(url, { method: "HEAD" });
+    if (head.ok) return true;
+  } catch {
+    // ignore
+  }
+  try {
+    const get = await fetch(url, { method: "GET" });
+    return get.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function findSteamAppIdByTitle(title) {
+  const term = String(title || "").trim();
+  if (!term) return null;
+  try {
+    const url = `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(term)}&l=english&cc=US`;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const json = await resp.json().catch(() => null);
+    const items = Array.isArray(json?.items) ? json.items : [];
+    if (!items.length) return null;
+    const targetKey = normalizedTitleKey(term);
+    const exact = items.find((item) => normalizedTitleKey(item?.name) === targetKey);
+    const best = exact || items[0];
+    const appid = String(best?.id || "").trim();
+    return /^\d+$/.test(appid) ? appid : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSteamCoverForGame(game) {
+  let appId = extractSteamAppIdFromGame(game);
+  const platform = String(game?.platform || "").toLowerCase();
+  if (!appId && platform.includes("steam")) {
+    appId = await findSteamAppIdByTitle(game?.title);
+  }
+  if (!appId) return { coverArtUrl: null, steamAppId: null };
+  const candidates = [
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900_2x.jpg`,
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`,
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/capsule_616x353.jpg`
+  ];
+  for (const candidate of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await urlExists(candidate);
+    if (ok) return { coverArtUrl: candidate, steamAppId: appId };
+  }
+  return { coverArtUrl: null, steamAppId: appId };
+}
+
+async function resolveBestCoverForGame(game) {
+  const results = await externalSearch(game.title);
+  const best = pickBestExternalCoverMatch(game, results);
+  if (best?.coverArtUrl) {
+    return {
+      coverArtUrl: best.coverArtUrl,
+      metadata: {
+        igdbId: best.metadata?.igdbId || null,
+        coverImageId: best.metadata?.coverImageId || null,
+        platforms: best.metadata?.platforms || [],
+        developers: best.metadata?.developers || [],
+        publishers: best.metadata?.publishers || [],
+        creators: best.metadata?.creators || []
+      }
+    };
+  }
+  const steam = await resolveSteamCoverForGame(game);
+  if (steam.coverArtUrl) {
+    return {
+      coverArtUrl: steam.coverArtUrl,
+      metadata: steam.steamAppId ? { steamAppId: Number(steam.steamAppId) } : {}
+    };
+  }
+  return { coverArtUrl: null, metadata: steam.steamAppId ? { steamAppId: Number(steam.steamAppId) } : {} };
 }
 
 async function getIgdbAccessToken(clientId, clientSecret) {

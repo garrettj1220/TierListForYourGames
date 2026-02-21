@@ -1691,8 +1691,8 @@ function App() {
                   <div className="game-list">
                     {filteredGames.map((g) => (
                       <article key={g.id} className="game-item">
-                        {g.coverArtUrl ? (
-                          <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
+                        {gameHasUsableCover(g, g.id) ? (
+                          <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} onError={() => markCoverLoadFailure(g.id)} />
                         ) : (
                           <div className="cover-fallback cover-fallback-list cover-fallback-empty" aria-label="No cover art" />
                         )}
@@ -1712,8 +1712,8 @@ function App() {
             <div className="game-list">
               {removedGames.map((g) => (
                 <article key={`removed-${g.id}`} className="game-item">
-                  {g.coverArtUrl ? (
-                    <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
+                  {gameHasUsableCover(g, g.id) ? (
+                    <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} onError={() => markCoverLoadFailure(g.id)} />
                   ) : (
                     <div className="cover-fallback cover-fallback-list cover-fallback-empty" aria-label="No cover art" />
                   )}

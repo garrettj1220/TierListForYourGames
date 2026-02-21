@@ -510,14 +510,19 @@ class JsonStorage {
     return { restored: restoredGames.length, games: restoredGames };
   }
 
-  async updateGameCover(userId, gameId, coverArtUrl, metadataPatch = {}) {
+  async updateGameCover(userId, gameId, coverArtUrl, metadataPatch = {}, options = {}) {
     const db = await readDb();
     const owned = db.userGames.some((g) => g.userId === userId && g.id === gameId);
     if (!owned) return { updated: false, game: null };
     db.gamesNormalized = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
     const catalogGame = db.gamesNormalized.find((g) => g.id === gameId);
     if (!catalogGame) return { updated: false, game: null };
-    catalogGame.coverArtUrl = coverArtUrl || catalogGame.coverArtUrl || null;
+    const allowClear = Boolean(options?.allowClear);
+    if (coverArtUrl || allowClear) {
+      catalogGame.coverArtUrl = coverArtUrl || null;
+    } else {
+      catalogGame.coverArtUrl = catalogGame.coverArtUrl || null;
+    }
     catalogGame.metadata = { ...(catalogGame.metadata || {}), ...(metadataPatch || {}) };
     for (const userGame of db.userGames) {
       if (userGame.userId !== userId || userGame.id !== gameId) continue;
@@ -1111,7 +1116,7 @@ class PgStorage {
     }
   }
 
-  async updateGameCover(userId, gameId, coverArtUrl, metadataPatch = {}) {
+  async updateGameCover(userId, gameId, coverArtUrl, metadataPatch = {}, options = {}) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -1124,12 +1129,19 @@ class PgStorage {
         return { updated: false, game: null };
       }
       const metadataJson = JSON.stringify(metadataPatch || {});
+      const allowClear = Boolean(options?.allowClear);
+      const existingCoverResult = await client.query(
+        "SELECT cover_art_url FROM games_normalized WHERE id = $1 LIMIT 1",
+        [gameId]
+      );
+      const existingCover = existingCoverResult.rows[0]?.cover_art_url || null;
+      const nextCover = coverArtUrl || (allowClear ? null : existingCover);
       await client.query(
         `UPDATE games_normalized
-         SET cover_art_url = COALESCE($1, cover_art_url),
+         SET cover_art_url = $1,
              metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
          WHERE id = $3`,
-        [coverArtUrl || null, metadataJson, gameId]
+        [nextCover, metadataJson, gameId]
       );
       const gameResult = await client.query(
         `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, g.metadata, ug.playtime_minutes, ug.manually_added
