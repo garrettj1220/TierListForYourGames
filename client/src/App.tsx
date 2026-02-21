@@ -69,6 +69,7 @@ type SearchResult = {
 
 type GamesTab = "main" | "removed";
 type ExportPlanMode = "single" | "tier-paged";
+type ExportKind = "pdf" | "image";
 type ExportPagePlan = {
   tiers: TierKey[];
   cardsPerRow: number;
@@ -352,6 +353,7 @@ function App() {
   const [pdfTitleInput, setPdfTitleInput] = useState("");
   const [pdfIncludeDate, setPdfIncludeDate] = useState(true);
   const [pdfExporting, setPdfExporting] = useState(false);
+  const [exportKind, setExportKind] = useState<ExportKind>("pdf");
   const [cardMenu, setCardMenu] = useState<{ gameId: string; x: number; y: number } | null>(null);
   const dragImageRef = useRef<HTMLElement | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
@@ -507,11 +509,12 @@ function App() {
     }
   }
 
-  function openPdfModal() {
+  function openExportModal(kind: ExportKind) {
     const userKey = username || "guest";
     const stored = readStoredPdfPrefs(userKey);
     setPdfTitleInput(stored?.title || defaultPdfTitle(username));
     setPdfIncludeDate(stored?.includeDate ?? true);
+    setExportKind(kind);
     setPdfModalOpen(true);
   }
 
@@ -1418,6 +1421,81 @@ function App() {
     }
   }
 
+  function downloadCanvasAsPng(canvas: HTMLCanvasElement, filename: string) {
+    const link = document.createElement("a");
+    link.href = canvas.toDataURL("image/png");
+    link.download = filename;
+    link.click();
+  }
+
+  async function exportImage() {
+    if (pdfExporting) return;
+    const normalizedTitle = pdfTitleInput.trim() || defaultPdfTitle(username);
+    setPdfTitleInput(normalizedTitle);
+    setPdfExporting(true);
+    try {
+      setStatus("Exporting image...");
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+      const html2canvasModule = await import("html2canvas");
+      const html2canvasFn: any = (html2canvasModule as any).default ?? html2canvasModule;
+      if (typeof html2canvasFn !== "function") {
+        throw new Error("Capture engine unavailable");
+      }
+      const sheets = pdfExportPlan.pages;
+      if (!sheets.length) throw new Error("Nothing to export");
+      const backgroundColor = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#090c12";
+      const renderedCanvases: HTMLCanvasElement[] = [];
+      for (let pageIndex = 0; pageIndex < sheets.length; pageIndex += 1) {
+        const pageNode = pdfExportPageRefs.current[pageIndex];
+        if (!pageNode) throw new Error(`Export surface missing for page ${pageIndex + 1}`);
+        await waitForExportAssets(pageNode);
+        const canvas = await html2canvasFn(pageNode, {
+          scale: Math.max(2, window.devicePixelRatio || 1),
+          backgroundColor,
+          useCORS: true,
+          logging: false
+        });
+        renderedCanvases.push(canvas);
+      }
+      const outputName = sanitizePdfFileName(normalizedTitle);
+      if (renderedCanvases.length === 1) {
+        downloadCanvasAsPng(renderedCanvases[0], `${outputName}.png`);
+      } else {
+        const width = Math.max(...renderedCanvases.map((canvas) => canvas.width));
+        const height = renderedCanvases.reduce((sum, canvas) => sum + canvas.height, 0);
+        const merged = document.createElement("canvas");
+        merged.width = width;
+        merged.height = height;
+        const ctx = merged.getContext("2d");
+        if (!ctx) throw new Error("Image export canvas unavailable");
+        let y = 0;
+        for (const canvas of renderedCanvases) {
+          ctx.drawImage(canvas, 0, y);
+          y += canvas.height;
+        }
+        downloadCanvasAsPng(merged, `${outputName}.png`);
+      }
+      writeStoredPdfPrefs(username || "guest", { title: normalizedTitle, includeDate: pdfIncludeDate });
+      setPdfModalOpen(false);
+      setStatus("Image downloaded.");
+    } catch (error) {
+      console.error(error);
+      const details = error instanceof Error ? error.message : "Unknown error";
+      setStatus(`Image export failed. ${details}`);
+    } finally {
+      setPdfExporting(false);
+      window.setTimeout(() => setStatus(""), 1400);
+    }
+  }
+
+  async function exportCurrentFormat() {
+    if (exportKind === "image") {
+      await exportImage();
+      return;
+    }
+    await exportPdf();
+  }
+
   if (loading) return <div className="app-shell loading">Loading...</div>;
 
   function startTouchDrag(gameId: string, target: DropTarget, index: number, e: React.PointerEvent<HTMLElement>) {
@@ -1510,7 +1588,8 @@ function App() {
           <button onClick={() => void setMode(themeMode === "dark" ? "light" : "dark")}>
             {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
           </button>
-          <button onClick={openPdfModal}>Export PDF</button>
+          <button onClick={() => openExportModal("pdf")}>Export PDF</button>
+          <button onClick={() => openExportModal("image")}>Export Image</button>
         </div>
       </header>
 
@@ -1788,7 +1867,7 @@ function App() {
       {pdfModalOpen && (
         <div className="modal-backdrop" onClick={closePdfModal}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Export PDF</h3>
+            <h3>{exportKind === "image" ? "Export Image" : "Export PDF"}</h3>
             <p className="modal-note">Choose a title and whether to include today&apos;s date.</p>
             <input
               value={pdfTitleInput}
@@ -1796,7 +1875,7 @@ function App() {
               onKeyDown={(e) => {
                 if (e.key !== "Enter") return;
                 e.preventDefault();
-                void exportPdf();
+                void exportCurrentFormat();
               }}
               placeholder={defaultPdfTitle(username)}
               aria-label="PDF title"
@@ -1811,7 +1890,7 @@ function App() {
             </label>
             <div className="header-actions">
               <button onClick={closePdfModal} disabled={pdfExporting}>Cancel</button>
-              <button className="primary" onClick={() => void exportPdf()} disabled={pdfExporting}>
+              <button className="primary" onClick={() => void exportCurrentFormat()} disabled={pdfExporting}>
                 {pdfExporting ? "Exporting..." : "Export"}
               </button>
             </div>
