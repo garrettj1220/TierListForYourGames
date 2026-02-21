@@ -509,6 +509,14 @@ app.get("/api/tierlist/games", async (req, res) => {
   res.json({ games });
 });
 
+app.get("/api/tierlist/games/removed", async (req, res) => {
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
+  const games = await storage.getRemovedGames(userId);
+  res.json({ games });
+});
+
 app.post("/api/tierlist/games/manual", async (req, res) => {
   const authUser = await requireAuthenticatedUser(req, res);
   if (!authUser) return;
@@ -539,6 +547,18 @@ app.post("/api/tierlist/games/remove", async (req, res) => {
     return res.status(400).json({ error: "gameIds must be an array" });
   }
   const result = await storage.removeGames(userId, gameIds);
+  res.json({ ok: true, ...result });
+});
+
+app.post("/api/tierlist/games/restore", async (req, res) => {
+  const authUser = await requireAuthenticatedUser(req, res);
+  if (!authUser) return;
+  const userId = authUser.userId;
+  const { gameIds } = req.body ?? {};
+  if (!Array.isArray(gameIds)) {
+    return res.status(400).json({ error: "gameIds must be an array" });
+  }
+  const result = await storage.restoreGames(userId, gameIds);
   res.json({ ok: true, ...result });
 });
 

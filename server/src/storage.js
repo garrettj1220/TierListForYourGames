@@ -58,6 +58,12 @@ function normalizeGameRecord(record) {
   };
 }
 
+function ensureRemovedGamesCollection(db) {
+  if (!db.removedGamesByUser || typeof db.removedGamesByUser !== "object" || Array.isArray(db.removedGamesByUser)) {
+    db.removedGamesByUser = {};
+  }
+}
+
 export function createStorage() {
   if (process.env.DATABASE_URL) {
     return new PgStorage(process.env.DATABASE_URL);
@@ -125,10 +131,26 @@ class JsonStorage {
 
   async bootstrap(userId) {
     const db = await readDb();
+    ensureRemovedGamesCollection(db);
+    const removedIds = Array.isArray(db.removedGamesByUser[userId]) ? db.removedGamesByUser[userId] : [];
+    const gamesById = new Map((db.gamesNormalized || []).map((g) => [g.id, g]));
+    const removedGames = removedIds
+      .map((id) => {
+        const game = gamesById.get(id);
+        if (!game) return null;
+        return normalizeGameRecord({
+          ...game,
+          sourceKey: game.sourceKey || game.source_key || null,
+          playtimeMinutes: 0,
+          manuallyAdded: false
+        });
+      })
+      .filter(Boolean);
     return {
       user: { id: userId, name: userId },
       linkedAccounts: db.linkedAccounts.filter((a) => a.userId === userId),
       games: db.userGames.filter((g) => g.userId === userId),
+      removedGames,
       tierListState: this.getTierState(db, userId),
       theme: this.getTheme(db, userId)
     };
@@ -233,10 +255,12 @@ class JsonStorage {
 
   async clearUserWorkspace(userId) {
     const db = await readDb();
+    ensureRemovedGamesCollection(db);
     const accountsRemoved = db.linkedAccounts.filter((a) => a.userId === userId).length;
     const gamesRemoved = db.userGames.filter((g) => g.userId === userId).length;
     db.linkedAccounts = db.linkedAccounts.filter((a) => a.userId !== userId);
     db.userGames = db.userGames.filter((g) => g.userId !== userId);
+    db.removedGamesByUser[userId] = [];
     this.setTierState(db, userId, { tiers: { ...DEFAULT_TIERS }, unranked: [], updatedAt: null });
     this.setThemeForUser(db, userId, "dark");
     await writeDb(db);
@@ -274,6 +298,7 @@ class JsonStorage {
 
   async addManualGame(userId, gameInput) {
     const db = await readDb();
+    ensureRemovedGamesCollection(db);
     db.gamesNormalized = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
     const tierState = this.getTierState(db, userId);
     const sourceKey = gameInput.sourceKey || makeSourceKey(gameInput.title, gameInput.platform || "Manual");
@@ -319,6 +344,7 @@ class JsonStorage {
     }
 
     tierState.unranked = Array.from(new Set([...(tierState.unranked ?? []), catalogGame.id]));
+    db.removedGamesByUser[userId] = (db.removedGamesByUser[userId] || []).filter((id) => id !== catalogGame.id);
     tierState.updatedAt = nowIso();
     this.setTierState(db, userId, tierState);
     await writeDb(db);
@@ -327,6 +353,7 @@ class JsonStorage {
 
   async removeGames(userId, gameIds) {
     const db = await readDb();
+    ensureRemovedGamesCollection(db);
     const tierState = this.getTierState(db, userId);
     const removeSet = new Set(gameIds);
     db.userGames = db.userGames.filter((g) => !(g.userId === userId && removeSet.has(g.id)));
@@ -334,6 +361,9 @@ class JsonStorage {
     for (const tier of Object.keys(tierState.tiers || {})) {
       tierState.tiers[tier] = tierState.tiers[tier].filter((id) => !removeSet.has(id));
     }
+    const removed = new Set([...(db.removedGamesByUser[userId] || [])]);
+    for (const id of gameIds) removed.add(id);
+    db.removedGamesByUser[userId] = Array.from(removed);
     tierState.updatedAt = nowIso();
     this.setTierState(db, userId, tierState);
     await writeDb(db);
@@ -349,10 +379,13 @@ class JsonStorage {
 
   async ingestSteamLibrary(userId, _accountId, ownedGames) {
     const db = await readDb();
+    ensureRemovedGamesCollection(db);
     db.gamesNormalized = Array.isArray(db.gamesNormalized) ? db.gamesNormalized : [];
     const tierState = this.getTierState(db, userId);
     let inserted = 0;
     let updated = 0;
+    let skippedRemoved = 0;
+    const removedSet = new Set(db.removedGamesByUser[userId] || []);
     for (const raw of ownedGames) {
       const title = raw.name || `Steam App ${raw.appid}`;
       const sourceKey = `steam:${raw.appid}`;
@@ -382,6 +415,10 @@ class JsonStorage {
       }
 
       const existing = db.userGames.find((g) => g.userId === userId && g.id === catalogGame.id);
+      if (!existing && removedSet.has(catalogGame.id)) {
+        skippedRemoved += 1;
+        continue;
+      }
       if (existing) {
         existing.playtimeMinutes = raw.playtime_forever ?? existing.playtimeMinutes ?? 0;
         existing.coverArtUrl = catalogGame.coverArtUrl || null;
@@ -404,13 +441,90 @@ class JsonStorage {
     tierState.updatedAt = nowIso();
     this.setTierState(db, userId, tierState);
     await writeDb(db);
-    return { inserted, updated };
+    return { inserted, updated, skippedRemoved };
+  }
+
+  async getRemovedGames(userId) {
+    const db = await readDb();
+    ensureRemovedGamesCollection(db);
+    const removedIds = Array.isArray(db.removedGamesByUser[userId]) ? db.removedGamesByUser[userId] : [];
+    const byId = new Map((db.gamesNormalized || []).map((g) => [g.id, g]));
+    return removedIds
+      .map((id) => {
+        const game = byId.get(id);
+        if (!game) return null;
+        return normalizeGameRecord({
+          ...game,
+          sourceKey: game.sourceKey || game.source_key || null,
+          playtimeMinutes: 0,
+          manuallyAdded: false
+        });
+      })
+      .filter(Boolean);
+  }
+
+  async restoreGames(userId, gameIds) {
+    if (!Array.isArray(gameIds) || gameIds.length === 0) return { restored: 0, games: [] };
+    const db = await readDb();
+    ensureRemovedGamesCollection(db);
+    const ids = Array.from(new Set(gameIds.map((id) => String(id))));
+    const tierState = this.getTierState(db, userId);
+    const removedSet = new Set(db.removedGamesByUser[userId] || []);
+    const byId = new Map((db.gamesNormalized || []).map((g) => [g.id, g]));
+    const restoredGames = [];
+    for (const id of ids) {
+      if (!removedSet.has(id)) continue;
+      const game = byId.get(id);
+      if (!game) continue;
+      const existing = db.userGames.find((g) => g.userId === userId && g.id === id);
+      if (!existing) {
+        db.userGames.push({
+          id,
+          userId,
+          title: game.title,
+          platform: game.platform,
+          genre: game.genre,
+          popularity: Number(game.popularity) || 50,
+          playtimeMinutes: 0,
+          coverArtUrl: game.coverArtUrl || game.cover_art_url || null,
+          metadata: game.metadata || {},
+          manuallyAdded: false,
+          createdAt: nowIso()
+        });
+      }
+      tierState.unranked = Array.from(new Set([...(tierState.unranked ?? []), id]));
+      removedSet.delete(id);
+      restoredGames.push(
+        normalizeGameRecord({
+          ...game,
+          sourceKey: game.sourceKey || game.source_key || null,
+          playtimeMinutes: 0,
+          manuallyAdded: false
+        })
+      );
+    }
+    db.removedGamesByUser[userId] = Array.from(removedSet);
+    tierState.updatedAt = nowIso();
+    this.setTierState(db, userId, tierState);
+    await writeDb(db);
+    return { restored: restoredGames.length, games: restoredGames };
   }
 }
 
 class PgStorage {
   constructor(connectionString) {
     this.pool = new Pool({ connectionString });
+  }
+
+  async ensureRemovedGamesTable(queryable = this.pool) {
+    await queryable.query(
+      `CREATE TABLE IF NOT EXISTS user_removed_games (
+         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         game_id TEXT NOT NULL REFERENCES games_normalized(id) ON DELETE CASCADE,
+         removed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+         PRIMARY KEY (user_id, game_id)
+       )`
+    );
   }
 
   async ensurePasswordColumns(queryable = this.pool) {
@@ -469,6 +583,7 @@ class PgStorage {
   }
 
   async bootstrap(userId) {
+    await this.ensureRemovedGamesTable();
     const client = await this.pool.connect();
     try {
       const accountsResult = await client.query(
@@ -485,11 +600,20 @@ class PgStorage {
       );
       const tierResult = await client.query("SELECT tiers, unranked, updated_at FROM tier_list_states WHERE user_id = $1", [userId]);
       const themeResult = await client.query("SELECT theme_id FROM user_theme_settings WHERE user_id = $1", [userId]);
+      const removedGamesResult = await client.query(
+        `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, g.metadata, 0 AS playtime_minutes, FALSE AS manually_added
+         FROM user_removed_games rg
+         JOIN games_normalized g ON g.id = rg.game_id
+         WHERE rg.user_id = $1
+         ORDER BY rg.removed_at DESC`,
+        [userId]
+      );
 
       return {
         user: { id: userId, name: userId },
         linkedAccounts: accountsResult.rows,
         games: gamesResult.rows.map(normalizeGameRecord),
+        removedGames: removedGamesResult.rows.map(normalizeGameRecord),
         tierListState: tierResult.rows[0]
           ? {
               tiers: tierResult.rows[0].tiers,
@@ -575,11 +699,13 @@ class PgStorage {
   }
 
   async clearUserWorkspace(userId) {
+    await this.ensureRemovedGamesTable();
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const accounts = await client.query("DELETE FROM linked_accounts WHERE user_id = $1", [userId]);
       const games = await client.query("DELETE FROM user_games WHERE user_id = $1", [userId]);
+      await client.query("DELETE FROM user_removed_games WHERE user_id = $1", [userId]);
       await client.query(
         `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
          VALUES ($1, $2::jsonb, $3::jsonb, NULL)
@@ -641,6 +767,7 @@ class PgStorage {
   }
 
   async addManualGame(userId, gameInput) {
+    await this.ensureRemovedGamesTable();
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -710,6 +837,7 @@ class PgStorage {
          ON CONFLICT (user_id, game_id) DO NOTHING`,
         [userId, persistedGameId, Boolean(gameInput.manuallyAdded ?? true)]
       );
+      await client.query("DELETE FROM user_removed_games WHERE user_id = $1 AND game_id = $2", [userId, persistedGameId]);
       await client.query(
         `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
          VALUES ($1, $2::jsonb, $3::jsonb, NOW())
@@ -745,10 +873,18 @@ class PgStorage {
   async removeGames(userId, gameIds) {
     if (gameIds.length === 0) return { removed: 0 };
     await this.ensureUserExists(userId);
+    await this.ensureRemovedGamesTable();
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("DELETE FROM user_games WHERE user_id = $1 AND game_id = ANY($2::text[])", [userId, gameIds]);
+      await client.query(
+        `INSERT INTO user_removed_games (user_id, game_id, removed_at)
+         SELECT $1, g.id, NOW()
+         FROM unnest($2::text[]) AS g(id)
+         ON CONFLICT (user_id, game_id) DO UPDATE SET removed_at = EXCLUDED.removed_at`,
+        [userId, gameIds]
+      );
       const stateResult = await client.query("SELECT tiers, unranked FROM tier_list_states WHERE user_id = $1", [userId]);
       if (stateResult.rows[0]) {
         const removeSet = new Set(gameIds);
@@ -783,9 +919,11 @@ class PgStorage {
   }
 
   async ingestSteamLibrary(userId, _accountId, ownedGames) {
+    await this.ensureRemovedGamesTable();
     const client = await this.pool.connect();
     let inserted = 0;
     let updated = 0;
+    let skippedRemoved = 0;
     try {
       await client.query("BEGIN");
       await client.query(
@@ -797,6 +935,8 @@ class PgStorage {
 
       const state = await client.query("SELECT unranked FROM tier_list_states WHERE user_id = $1", [userId]);
       const unranked = new Set(state.rows[0]?.unranked ?? []);
+      const removedRows = await client.query("SELECT game_id FROM user_removed_games WHERE user_id = $1", [userId]);
+      const removedSet = new Set(removedRows.rows.map((row) => row.game_id));
 
       for (const raw of ownedGames) {
         const sourceKey = `steam:${raw.appid}`;
@@ -843,6 +983,16 @@ class PgStorage {
           }
         }
 
+        const alreadyOwnedResult = await client.query(
+          "SELECT 1 FROM user_games WHERE user_id = $1 AND game_id = $2 LIMIT 1",
+          [userId, gameId]
+        );
+        const alreadyOwned = Boolean(alreadyOwnedResult.rows[0]);
+        if (!alreadyOwned && removedSet.has(gameId)) {
+          skippedRemoved += 1;
+          continue;
+        }
+
         await client.query(
           `INSERT INTO user_games (user_id, game_id, playtime_minutes, manually_added)
            VALUES ($1, $2, $3, FALSE)
@@ -858,7 +1008,83 @@ class PgStorage {
         userId
       ]);
       await client.query("COMMIT");
-      return { inserted, updated };
+      return { inserted, updated, skippedRemoved };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getRemovedGames(userId) {
+    await this.ensureRemovedGamesTable();
+    const result = await this.pool.query(
+      `SELECT g.id, g.title, g.platform, g.genre, g.popularity, g.cover_art_url, g.metadata, 0 AS playtime_minutes, FALSE AS manually_added
+       FROM user_removed_games rg
+       JOIN games_normalized g ON g.id = rg.game_id
+       WHERE rg.user_id = $1
+       ORDER BY rg.removed_at DESC`,
+      [userId]
+    );
+    return result.rows.map(normalizeGameRecord);
+  }
+
+  async restoreGames(userId, gameIds) {
+    if (!Array.isArray(gameIds) || gameIds.length === 0) return { restored: 0, games: [] };
+    await this.ensureRemovedGamesTable();
+    const ids = Array.from(new Set(gameIds.map((id) => String(id))));
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existingGames = await client.query(
+        `SELECT id, title, platform, genre, popularity, cover_art_url, metadata
+         FROM games_normalized
+         WHERE id = ANY($1::text[])`,
+        [ids]
+      );
+      const gameMap = new Map(existingGames.rows.map((row) => [row.id, row]));
+      await client.query(
+        `INSERT INTO user_games (user_id, game_id, playtime_minutes, manually_added)
+         SELECT $1, g.id, 0, FALSE
+         FROM unnest($2::text[]) AS g(id)
+         ON CONFLICT (user_id, game_id) DO NOTHING`,
+        [userId, ids]
+      );
+      await client.query(
+        `DELETE FROM user_removed_games
+         WHERE user_id = $1 AND game_id = ANY($2::text[])`,
+        [userId, ids]
+      );
+      await client.query(
+        `INSERT INTO tier_list_states (user_id, tiers, unranked, updated_at)
+         VALUES ($1, $2::jsonb, $3::jsonb, NOW())
+         ON CONFLICT (user_id) DO NOTHING`,
+        [userId, JSON.stringify(DEFAULT_TIERS), JSON.stringify([])]
+      );
+      const stateResult = await client.query("SELECT unranked FROM tier_list_states WHERE user_id = $1", [userId]);
+      const unranked = new Set(stateResult.rows[0]?.unranked ?? []);
+      for (const id of ids) {
+        if (!gameMap.has(id)) continue;
+        unranked.add(id);
+      }
+      await client.query("UPDATE tier_list_states SET unranked = $1::jsonb, updated_at = NOW() WHERE user_id = $2", [
+        JSON.stringify(Array.from(unranked)),
+        userId
+      ]);
+      await client.query("COMMIT");
+      const restoredGames = ids
+        .map((id) => gameMap.get(id))
+        .filter(Boolean)
+        .map((row) =>
+          normalizeGameRecord({
+            ...row,
+            sourceKey: row.source_key ?? row.sourceKey ?? null,
+            playtime_minutes: 0,
+            manually_added: false
+          })
+        );
+      return { restored: restoredGames.length, games: restoredGames };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

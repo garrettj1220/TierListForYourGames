@@ -67,6 +67,8 @@ type SearchResult = {
   metadata?: Record<string, unknown>;
 };
 
+type GamesTab = "main" | "removed";
+
 function normalizeApiBase(rawValue: unknown): string {
   const firstToken = String(rawValue ?? "")
     .trim()
@@ -179,6 +181,7 @@ function readLocalWorkspace(userId: string) {
     return {
       linkedAccounts: Array.isArray(parsed.linkedAccounts) ? (parsed.linkedAccounts as LinkedAccount[]) : [],
       games: Array.isArray(parsed.games) ? (parsed.games as Game[]) : [],
+      removedGames: Array.isArray(parsed.removedGames) ? (parsed.removedGames as Game[]) : [],
       tierState: parsed.tierState && typeof parsed.tierState === "object" ? (parsed.tierState as TierListState) : DEFAULT_TIER_STATE,
       themeMode: parsed.themeMode === "light" || parsed.themeMode === "dark" ? (parsed.themeMode as ThemeMode) : "dark"
     };
@@ -259,6 +262,7 @@ function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readStoredTheme(initialClientUserId));
   const [linkedAccounts, setLinkedAccounts] = useState<LinkedAccount[]>([]);
   const [games, setGames] = useState<Game[]>([]);
+  const [removedGames, setRemovedGames] = useState<Game[]>([]);
   const [tierState, setTierState] = useState<TierListState>(DEFAULT_TIER_STATE);
   const [dragGameId, setDragGameId] = useState<string | null>(null);
   const [dragOrigin, setDragOrigin] = useState<DragLocation | null>(null);
@@ -275,6 +279,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [gamesSearchInput, setGamesSearchInput] = useState("");
   const [gamesSearchQuery, setGamesSearchQuery] = useState("");
+  const [gamesTab, setGamesTab] = useState<GamesTab>("main");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
@@ -410,6 +415,7 @@ function App() {
     if (local) {
       setLinkedAccounts(local.linkedAccounts);
       setGames(local.games.map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null })));
+      setRemovedGames((local.removedGames || []).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null })));
       setTierState(local.tierState ?? DEFAULT_TIER_STATE);
       setThemeMode(local.themeMode ?? "dark");
       lastSavedTierStateRef.current = serializeTierState(local.tierState ?? DEFAULT_TIER_STATE);
@@ -438,6 +444,7 @@ function App() {
         JSON.stringify({
           linkedAccounts,
           games,
+          removedGames,
           tierState,
           themeMode,
           updatedAt: Date.now()
@@ -446,7 +453,7 @@ function App() {
     } catch {
       // ignore storage access failures
     }
-  }, [linkedAccounts, games, tierState, themeMode, loading, username]);
+  }, [linkedAccounts, games, removedGames, tierState, themeMode, loading, username]);
 
   useEffect(() => {
     dragGameIdRef.current = dragGameId;
@@ -837,6 +844,7 @@ function App() {
         setUsername("");
         setLinkedAccounts([]);
         setGames([]);
+        setRemovedGames([]);
         setTierState(DEFAULT_TIER_STATE);
         setStatus("Guest mode: signed out. Sign in to sync/save to cloud.");
         setScreen("stats");
@@ -865,6 +873,7 @@ function App() {
         }
       }
       const nextGames = ((bootstrap?.games ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null }));
+      const nextRemovedGames = ((bootstrap?.removedGames ?? []) as Game[]).map((g) => ({ ...g, coverArtUrl: assetUrl(g.coverArtUrl) ?? null }));
       const nextTheme = bootstrap?.theme?.themeId === "light" ? "light" : "dark";
       const nextTierState = bootstrap?.tierListState ?? DEFAULT_TIER_STATE;
       const connectionsResp = await apiFetch("/api/accounts/connections");
@@ -881,6 +890,7 @@ function App() {
       }
       setLinkedAccounts(nextAccounts);
       setGames(nextGames);
+      setRemovedGames(nextRemovedGames);
       setTierState(nextTierState);
       lastSavedTierStateRef.current = serializeTierState(nextTierState);
       tierStateReadyRef.current = true;
@@ -1020,8 +1030,12 @@ function App() {
   }
 
   async function removeGame(gameId: string) {
+    const removedGame = gameMap.get(gameId);
     if (!hasUsername) {
       setGames((prev) => prev.filter((g) => g.id !== gameId));
+      if (removedGame) {
+        setRemovedGames((prev) => (prev.some((g) => g.id === removedGame.id) ? prev : [removedGame, ...prev]));
+      }
       setTierState((prev) => ({
         ...prev,
         unranked: prev.unranked.filter((id) => id !== gameId),
@@ -1044,6 +1058,9 @@ function App() {
     });
     if (!resp.ok) return;
     setGames((prev) => prev.filter((g) => g.id !== gameId));
+    if (removedGame) {
+      setRemovedGames((prev) => (prev.some((g) => g.id === removedGame.id) ? prev : [removedGame, ...prev]));
+    }
     setTierState((prev) => ({
       ...prev,
       unranked: prev.unranked.filter((id) => id !== gameId),
@@ -1056,6 +1073,31 @@ function App() {
         F: prev.tiers.F.filter((id) => id !== gameId)
       }
     }));
+  }
+
+  async function restoreRemovedGame(gameId: string) {
+    if (!hasUsername) {
+      const game = removedGames.find((g) => g.id === gameId);
+      if (!game) return;
+      setRemovedGames((prev) => prev.filter((g) => g.id !== gameId));
+      setGames((prev) => (prev.some((g) => g.id === gameId) ? prev : [game, ...prev]));
+      setTierState((prev) => ({ ...prev, unranked: Array.from(new Set([gameId, ...prev.unranked])) }));
+      return;
+    }
+    const resp = await apiFetch("/api/tierlist/games/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gameIds: [gameId] })
+    });
+    if (!resp.ok) return;
+    const json = await resp.json().catch(() => null);
+    const restored = Array.isArray(json?.games) ? (json.games as Game[]) : [];
+    const restoredGame = restored[0] ? { ...restored[0], coverArtUrl: assetUrl(restored[0].coverArtUrl) ?? null } : null;
+    setRemovedGames((prev) => prev.filter((g) => g.id !== gameId));
+    if (restoredGame) {
+      setGames((prev) => (prev.some((g) => g.id === restoredGame.id) ? prev : [restoredGame, ...prev]));
+    }
+    setTierState((prev) => ({ ...prev, unranked: Array.from(new Set([gameId, ...prev.unranked])) }));
   }
 
   function quickMoveGameToTier(gameId: string, tier: QuickMoveTier) {
@@ -1361,61 +1403,88 @@ function App() {
       {screen === "games" && (
         <section className="panel">
           <div className="row-between">
-            <h2>Games</h2>
+            <h2>{gamesTab === "main" ? "Games" : "Removed Games"}</h2>
             <div className="header-actions">
-              <button onClick={() => void syncMissingGamesFromLinkedAccounts()} disabled={syncingMissingGames || !hasUsername}>
-                {syncingMissingGames ? "Syncing..." : "Sync Missing Games"}
-              </button>
-              <button className="primary" onClick={() => setAddModalOpen(true)}>Add Game</button>
+              {gamesTab === "main" ? (
+                <>
+                  <button onClick={() => void syncMissingGamesFromLinkedAccounts()} disabled={syncingMissingGames || !hasUsername}>
+                    {syncingMissingGames ? "Syncing..." : "Sync Missing Games"}
+                  </button>
+                  <button className="primary" onClick={() => setAddModalOpen(true)}>Add Game</button>
+                  <button onClick={() => setGamesTab("removed")}>Removed Games ({removedGames.length})</button>
+                </>
+              ) : (
+                <button onClick={() => setGamesTab("main")}>X</button>
+              )}
             </div>
           </div>
-          {games.length === 0 ? (
-            <p>No games.</p>
-          ) : (
-            <>
-              <input
-                type="search"
-                value={gamesSearchInput}
-                onChange={(e) => setGamesSearchInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
-                  e.preventDefault();
-                  applyGamesSearch();
-                }}
-                placeholder="Search your games..."
-                aria-label="Search your games"
-              />
-              <div className="header-actions">
-                <button onClick={applyGamesSearch}>Search</button>
-                <button
-                  onClick={() => {
-                    setGamesSearchInput("");
-                    setGamesSearchQuery("");
+          {gamesTab === "main" ? (
+            games.length === 0 ? (
+              <p>No games.</p>
+            ) : (
+              <>
+                <input
+                  type="search"
+                  value={gamesSearchInput}
+                  onChange={(e) => setGamesSearchInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    applyGamesSearch();
                   }}
-                >
-                  Clear
-                </button>
-              </div>
-              {filteredGames.length === 0 ? (
-                <p>No games match your search.</p>
-              ) : (
-                <div className="game-list">
-                  {filteredGames.map((g) => (
-                    <article key={g.id} className="game-item">
-                      {g.coverArtUrl ? (
-                        <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
-                      ) : (
-                        <div className="cover-fallback cover-fallback-list cover-fallback-empty" aria-label="No cover art" />
-                      )}
-                      <div className="game-meta">
-                        <strong>{g.title}</strong>
-                      </div>
-                      <button className="danger" onClick={() => void removeGame(g.id)}>Remove</button>
-                    </article>
-                  ))}
+                  placeholder="Search your games..."
+                  aria-label="Search your games"
+                />
+                <div className="header-actions">
+                  <button onClick={applyGamesSearch}>Search</button>
+                  <button
+                    onClick={() => {
+                      setGamesSearchInput("");
+                      setGamesSearchQuery("");
+                    }}
+                  >
+                    Clear
+                  </button>
                 </div>
-              )}
-            </>
+                {filteredGames.length === 0 ? (
+                  <p>No games match your search.</p>
+                ) : (
+                  <div className="game-list">
+                    {filteredGames.map((g) => (
+                      <article key={g.id} className="game-item">
+                        {g.coverArtUrl ? (
+                          <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
+                        ) : (
+                          <div className="cover-fallback cover-fallback-list cover-fallback-empty" aria-label="No cover art" />
+                        )}
+                        <div className="game-meta">
+                          <strong>{g.title}</strong>
+                        </div>
+                        <button className="danger" onClick={() => void removeGame(g.id)}>Remove</button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </>
+            )
+          ) : removedGames.length === 0 ? (
+            <p>No removed games.</p>
+          ) : (
+            <div className="game-list">
+              {removedGames.map((g) => (
+                <article key={`removed-${g.id}`} className="game-item">
+                  {g.coverArtUrl ? (
+                    <img src={assetUrl(g.coverArtUrl) ?? undefined} alt={g.title} />
+                  ) : (
+                    <div className="cover-fallback cover-fallback-list cover-fallback-empty" aria-label="No cover art" />
+                  )}
+                  <div className="game-meta">
+                    <strong>{g.title}</strong>
+                  </div>
+                  <button className="primary" onClick={() => void restoreRemovedGame(g.id)}>Add</button>
+                </article>
+              ))}
+            </div>
           )}
         </section>
       )}
